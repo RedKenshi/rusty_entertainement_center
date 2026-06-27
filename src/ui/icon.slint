@@ -1,0 +1,45 @@
+import { Colors } from "../theme/colors.slint";
+
+export struct IconPaths {
+    primary-path: string,
+    secondary-path: string,
+    viewbox-width: float,
+    viewbox-height: float,
+}
+
+export global IconLoader {
+    pure callback resolve(string, string) -> IconPaths;
+}
+
+// Font Awesome icon by name (e.g. "hard-drive") and style folder (e.g. "solid", "duotone").
+// Styles: solid, regular, light, thin, duotone, brands
+export component FaIcon inherits Rectangle {
+    in property <string> icon: "";
+    in property <string> style: "solid";
+    in property <length> icon-size: 16px;
+    in property <color> primary-color: Colors.primary-50;
+    in property <color> secondary-color: Colors.primary-30;
+
+    width: icon-size;
+    height: icon-size;
+
+    private property <IconPaths> paths: IconLoader.resolve(icon, style);
+
+    if paths.secondary-path != "": Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: paths.viewbox-width;
+        viewbox-height: paths.viewbox-height;
+        commands: paths.secondary-path;
+        fill: root.secondary-color;
+    }
+
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: paths.viewbox-width;
+        viewbox-height: paths.viewbox-height;
+        commands: paths.primary-path;
+        fill: root.primary-color;
+    }
+}

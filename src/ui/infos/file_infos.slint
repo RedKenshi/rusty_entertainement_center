@@ -1,0 +1,98 @@
+import { Colors } from "../../theme/colors.slint";
+import { Spacing } from "../../theme/spacing.slint";
+import { FaIcon } from "../icon.slint";
+
+export component FileInfos inherits Rectangle {
+    in property <string> name;
+    in property <string> bitrate;
+    in property <string> size;
+    in property <string> duration;
+    in property <string> format;
+    in property <string> codec;
+
+    horizontal-stretch: 1;
+    background: Colors.primary-10;
+
+    HorizontalLayout {
+        horizontal-stretch: 1;
+        alignment: start;
+        cross-axis-alignment: center;
+        spacing: Spacing.m;
+        padding-left: Spacing.m;
+        
+        Text {
+            text: name;
+            font-size: 13px;
+            
+            color: Colors.primary-50;
+        }
+
+    }
+    
+    HorizontalLayout {
+        alignment: end;
+        cross-axis-alignment: center;
+        spacing: Spacing.s;
+        padding-right: Spacing.m;
+        
+        Text {
+            text: format;
+            font-size: 13px;
+            
+            color: Colors.primary-30;
+        }
+    
+        Text {
+            text: codec;
+            font-size: 13px;
+            
+            color: Colors.primary-30;
+        }
+
+        FaIcon {
+            icon: "grip-dots-vertical";
+            style: "duotone";
+            icon-size: 16px;
+            primary-color: Colors.primary-30;
+            secondary-color: Colors.primary-20;
+        }
+
+        Text {
+            text: bitrate;
+            font-size: 13px;
+            
+            color: Colors.primary-50;
+        }
+    
+        FaIcon {
+            icon: "grip-dots-vertical";
+            style: "duotone";
+            icon-size: 16px;
+            primary-color: Colors.primary-30;
+            secondary-color: Colors.primary-20;
+        }
+        
+        Text {
+            text: size;
+            font-size: 13px;
+            
+            color: Colors.primary-50;
+        }
+
+        FaIcon {
+            icon: "grip-dots-vertical";
+            style: "duotone";
+            icon-size: 16px;
+            primary-color: Colors.primary-30;
+            secondary-color: Colors.primary-20;
+        }
+
+        Text {
+            text: duration;
+            font-size: 13px;
+            
+            color: Colors.primary-50;
+        }
+
+    }
+}

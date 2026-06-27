@@ -1,0 +1,59 @@
+import { Colors } from "../../theme/colors.slint";
+import { Spacing } from "../../theme/spacing.slint";
+import { FaIcon } from "../icon.slint";
+
+export component FolderRow inherits Rectangle {
+    in property <string> name;
+    in property <bool> expanded;
+    in property <bool> selected;
+    in property <int> nbFiles;
+
+    horizontal-stretch: 1;
+
+    HorizontalLayout {
+        width: 100%;
+        padding: Spacing.s;
+        padding-right: Spacing.m;
+        spacing: Spacing.s;
+        cross-axis-alignment: center;
+        alignment: space-between;
+
+        HorizontalLayout {
+            spacing: Spacing.m;
+            FaIcon {
+                icon: expanded ? "folder-open" : "folder";
+                style: "duotone";
+                icon-size: 16px;
+                primary-color: Colors.primary-50;
+                secondary-color: expanded ? Colors.primary-30 : Colors.primary-50;
+            }
+
+            Text {
+                font-size: selected ? 13px : 12px;
+                text: "[" + name + "]";
+                horizontal-stretch: 1;
+                horizontal-alignment: left;
+                color: selected ? Colors.primary-70 : Colors.primary-50;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Spacing.m;
+
+            Text {
+                text: nbFiles;
+                font-size: 12px;
+                horizontal-alignment: right;
+                color: selected ? Colors.primary-50 : Colors.primary-20;
+            }
+            
+            FaIcon {
+                icon: "files";
+                style: "duotone";
+                icon-size: 16px;
+                primary-color: selected ? Colors.primary-70 : Colors.primary-50;
+                secondary-color: selected ? Colors.primary-50 : Colors.primary-30;
+            }
+        }
+    }
+}

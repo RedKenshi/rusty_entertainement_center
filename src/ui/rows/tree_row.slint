@@ -1,0 +1,60 @@
+import { TreeItem } from "../structs.slint";
+import { VolumeRow } from "volume_row.slint";
+import { FolderRow } from "folder_row.slint";
+import { FileRow } from "file_row.slint";
+import { Colors } from "../../theme/colors.slint";
+import { Spacing, BorderRadius } from "../../theme/spacing.slint";
+
+export component TreeRow inherits Rectangle {
+    in property <TreeItem> item;
+
+    height: 28px;
+    width: 100%;
+
+    HorizontalLayout {
+        width: 100%;
+        spacing: Spacing.xs;
+        
+        Rectangle {
+            width: item.indent * Spacing.l + Spacing.m;
+        }
+        
+        Rectangle {
+            border-radius: BorderRadius.m;
+            background: item.selected ? Colors.primary-20 : Colors.primary-10;
+            horizontal-stretch: 1;
+            height: parent.height - Spacing.s;
+
+            HorizontalLayout {
+                horizontal-stretch: 1;
+                spacing: Spacing.s;
+
+                if item.is_volume : VolumeRow {
+                    name: item.name;
+                    nbFiles: item.nbFiles;
+                    filesSize: item.filesSize;
+                    selected: item.selected;
+                }
+
+                if item.is_folder && !item.is_volume : FolderRow {
+                    name: item.name;
+                    expanded: item.expanded;
+                    nbFiles: item.nbFiles;
+                    selected: item.selected;
+                }
+
+                if !item.is_folder && !item.is_volume : FileRow {
+                    name: item.name;
+                    codec: item.codec;
+                    bitrate: item.bitrate;
+                    size: item.size;
+                    duration: item.filesDuration;
+                    selected: item.selected;
+                }
+            }
+        }
+        Rectangle {
+            width: Spacing.m;
+        }
+    }
+}

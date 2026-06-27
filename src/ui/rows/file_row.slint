@@ -1,0 +1,51 @@
+import { Colors } from "../../theme/colors.slint";
+import { Spacing } from "../../theme/spacing.slint";
+import { FaIcon } from "../icon.slint";
+
+export component FileRow inherits Rectangle {
+    in property <string> name;
+    in property <string> codec;
+    in property <string> bitrate;
+    in property <string> size;
+    in property <string> duration;
+    in property <bool> selected;
+
+    horizontal-stretch: 1;
+
+    HorizontalLayout {
+        width: 100%;
+        padding-right: Spacing.m;
+        padding-left: Spacing.m;
+        spacing: Spacing.m;
+        cross-axis-alignment: CrossAxisAlignment.center;
+
+        FaIcon {
+            icon: "file";
+            style: "duotone";
+            icon-size: 16px;
+            primary-color: selected ? Colors.primary-70 : Colors.primary-60;
+            secondary-color: selected ? Colors.primary-40 : Colors.primary-30;
+        }
+
+        Text {
+            text: name;
+            font-size: selected ? 13px : 12px;
+            horizontal-alignment: left;
+            color: selected ? Colors.primary-70 : Colors.primary-50;
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+        HorizontalLayout {
+            spacing: Spacing.s;
+            horizontal-stretch: 1;
+                
+            Text {
+                text: duration;
+                font-size: 12px;
+                horizontal-alignment: right;
+                color: selected ? Colors.primary-40 : Colors.primary-20;
+            }
+        }
+    }
+}

@@ -1,0 +1,19 @@
+[package]
+name = "rusty-entertainement-center"
+build = "build.rs"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+walkdir = "2.5.0"
+slint = "1.17.0"
+
+[build-dependencies]
+slint-build = "1.17.0"
+
+[profile.release]
+panic = "abort"
+
+[profile.dev]
+panic = "abort"

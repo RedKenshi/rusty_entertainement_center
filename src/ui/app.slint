@@ -1,0 +1,216 @@
+import { ScrollView } from "std-widgets.slint";
+import { TreeItem } from "structs.slint";
+import { TreeRow } from "rows/tree_row.slint";
+import { SpaceRow } from "rows/space_row.slint";
+import { IconLoader, FaIcon } from "icon.slint";
+import { Colors } from "../theme/colors.slint";
+
+import "../../assets/fonts/PixelifySans-VariableFont_wght.ttf";
+import { Spacing } from "../theme/spacing.slint";
+import { FileInfos } from "infos/file_infos.slint";
+import { FolderInfos } from "infos/folder_infos.slint";
+import { VolumeInfos } from "infos/volume_infos.slint";
+
+export { TreeItem, IconLoader, Colors }
+
+export component MainWindow inherits Window {
+    width: 560px;
+    height: 320px;
+    background: Colors.primary-5;
+    default-font-family: "Pixelify Sans";
+    default-font-size: 15px;
+    default-font-weight: 600;
+
+    callback move_selection(delta: int);
+    callback open_selected();
+    callback navigate_back();
+    callback cycle_theme();
+
+    in-out property <[TreeItem]> tree;
+    in-out property <int> selected_index: 0;
+    in-out property <length> scroll_offset: 0px;
+
+    private property <length> top-space: 8px;
+    private property <length> bottom-space: 80px;
+    private property <length> row-height: 28px;
+
+    pure function item-top(index: int) -> length {
+        root.top-space + index * root.row-height
+    }
+
+    pure function content-height() -> length {
+        if root.tree.length == 0 {
+            0px
+        } else {
+            root.top-space + root.tree.length * root.row-height + root.bottom-space
+        }
+    }
+
+    private property <length> viewport-height: scroll_view.visible-height;
+
+    private property <TreeItem> selected-item: root.tree.length > 0
+        ? root.tree[clamp(root.selected_index, 0, root.tree.length - 1)]
+        : {
+            name: "",
+            format: "",
+            codec: "",
+            bitrate: "",
+            size: "",
+            indent: 0,
+            is_folder: false,
+            is_volume: false,
+            expanded: false,
+            selected: false,
+            path: "",
+            nbFiles: 0,
+            filesSize: "",
+            filesDuration: "",
+        };
+
+    function update-scroll-to-selection() {
+        if root.tree.length == 0 {
+            root.scroll_offset = 0px;
+            return;
+        }
+
+        let viewport_h = root.viewport-height;
+        if viewport_h <= 0px {
+            return;
+        }
+
+        let index = clamp(root.selected_index, 0, root.tree.length - 1);
+        let item_top = root.item-top(index);
+        let centered = item_top - (viewport_h - root.row-height) / 2;
+        let max_offset = max(root.content-height() - viewport_h, 0px);
+        root.scroll_offset = clamp(centered, 0px, max_offset);
+    }
+
+    changed selected_index => {
+        root.update-scroll-to-selection();
+    }
+
+    changed tree => {
+        root.update-scroll-to-selection();
+    }
+
+    changed viewport-height => {
+        root.update-scroll-to-selection();
+    }
+
+    FocusScope {
+        width: 100%;
+        height: 100%;
+        focus-on-click: true;
+        focus-on-tab-navigation: true;
+
+        KeyBinding {
+            keys: @keys(LeftArrow);
+            activated => root.navigate_back();
+        }
+        KeyBinding {
+            keys: @keys(Escape);
+            activated => root.navigate_back();
+        }
+        KeyBinding {
+            keys: @keys(RightArrow);
+            activated => root.open_selected();
+        }
+        KeyBinding {
+            keys: @keys(Return);
+            activated => root.open_selected();
+        }
+        KeyBinding {
+            keys: @keys(UpArrow);
+            activated => root.move_selection(-1);
+        }
+        KeyBinding {
+            keys: @keys(DownArrow);
+            activated => root.move_selection(1);
+        }
+        KeyBinding {
+            keys: @keys(T);
+            activated => root.cycle_theme();
+        }
+
+        VerticalLayout {
+            Rectangle {
+                horizontal-stretch: 1;
+                scroll_view := ScrollView {
+                    width: 100%;
+                    height: 100%;
+                    viewport-y: -root.scroll_offset;
+
+                    VerticalLayout {
+                        width: parent.width;
+                        spacing: 0;
+
+                        for item[index] in root.tree : VerticalLayout {
+                            width: parent.width;
+                            spacing: 0;
+
+                            if index == 0 : SpaceRow {
+                                width: parent.width;
+                                space-height: root.top-space;
+                            }
+
+                            TreeRow {
+                                width: parent.width;
+                                item: item;
+                            }
+
+                            if index == root.tree.length - 1 : SpaceRow {
+                                width: parent.width;
+                                space-height: root.bottom-space;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            Rectangle {
+                width: parent.width;
+                height: 2px;
+                background: Colors.primary-30;
+                
+            }
+
+            Rectangle {
+                width: parent.width;
+                height: 32px;
+
+                if root.tree.length > 0 && root.selected-item.is_volume : VolumeInfos {
+                    width: 100%;
+                    height: 100%;
+                    
+                    name: root.selected-item.name;
+                    size: root.selected-item.filesSize;
+                    duration: root.selected-item.filesDuration;
+                    nbFiles: root.selected-item.nbFiles;
+                }
+
+                if root.tree.length > 0 && root.selected-item.is_folder && !root.selected-item.is_volume : FolderInfos {
+                    width: 100%;
+                    height: 100%;
+
+                    name: root.selected-item.name;
+                    size: root.selected-item.filesSize;
+                    duration: root.selected-item.filesDuration;
+                    nbFiles: root.selected-item.nbFiles;
+                }
+
+                if root.tree.length > 0 && !root.selected-item.is_folder && !root.selected-item.is_volume : FileInfos {
+                    width: 100%;
+                    height: 100%;
+
+                    bitrate: root.selected-item.bitrate;
+                    format: root.selected-item.format;
+                    codec: root.selected-item.codec;
+
+                    name: root.selected-item.name;
+                    size: root.selected-item.size;
+                    duration: root.selected-item.filesDuration;
+                }
+            }
+        }
+    }
+}

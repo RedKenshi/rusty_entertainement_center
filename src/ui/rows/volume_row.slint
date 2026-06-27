@@ -1,0 +1,64 @@
+import { Colors } from "../../theme/colors.slint";
+import { Spacing } from "../../theme/spacing.slint";
+import { FaIcon } from "../icon.slint";
+
+export component VolumeRow inherits Rectangle {
+    in property <string> name;
+    in property <bool> selected;
+    in property <int> nbFiles;
+    in property <string> filesSize;
+
+    horizontal-stretch: 1;
+
+    HorizontalLayout {
+        width: 100%;
+        padding: Spacing.s;
+        padding-right: Spacing.m;
+        spacing: Spacing.m;
+        cross-axis-alignment: center;
+        alignment: space-between;
+
+        HorizontalLayout {
+            spacing: Spacing.m;
+
+            FaIcon {
+                icon: "database";
+                style: "regular";
+                icon-size: 16px;
+                primary-color: Colors.primary-50;
+            }
+            Text {
+                font-size: selected ? 13px : 12px;
+                text: "[" + name + "]";
+                horizontal-stretch: 1;
+                horizontal-alignment: left;
+                color: selected ? Colors.primary-70 : Colors.primary-50;
+            }
+            Text {
+                text: filesSize;
+                font-size: 12px;
+                horizontal-alignment: right;
+                color: selected ? Colors.primary-60 : Colors.primary-40;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: Spacing.m;
+
+            Text {
+                text: nbFiles;
+                font-size: 12px;
+                horizontal-alignment: right;
+                color: selected ? Colors.primary-50 : Colors.primary-20;
+            }
+            
+            FaIcon {
+                icon: "files";
+                style: "duotone";
+                icon-size: 16px;
+                primary-color: selected ? Colors.primary-70 : Colors.primary-50;
+                secondary-color: selected ? Colors.primary-50 : Colors.primary-30;
+            }
+        }
+    }
+}

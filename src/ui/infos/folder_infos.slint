@@ -1,0 +1,89 @@
+import { Colors } from "../../theme/colors.slint";
+import { Spacing } from "../../theme/spacing.slint";
+import { FaIcon } from "../icon.slint";
+
+export component FolderInfos inherits Rectangle {
+    in property <string> name;
+    in property <string> size;
+    in property <string> duration;
+    in property <string> nbFiles;
+
+    horizontal-stretch: 1;
+    background: Colors.primary-10;
+
+    HorizontalLayout {
+        horizontal-stretch: 1;
+        alignment: start;
+        cross-axis-alignment: center;
+        spacing: Spacing.m;
+        padding-left: Spacing.m;
+
+        FaIcon {
+            icon: "folder";
+            style: "duotone";
+            icon-size: 16px;
+            primary-color: Colors.primary-30;
+            secondary-color: Colors.primary-20;
+        }
+        
+        Text {
+            text: name;
+            font-size: 13px;
+            horizontal-alignment: left;
+            color: Colors.primary-50;
+        }
+    }
+
+    HorizontalLayout {
+        alignment: end;
+        cross-axis-alignment: center;
+        spacing: Spacing.s;
+        padding-right: Spacing.m;
+
+        FaIcon {
+            icon: "files";
+            style: "duotone";
+            icon-size: 16px;
+            primary-color: Colors.primary-30;
+            secondary-color: Colors.primary-20;
+        }
+
+        Text {
+            text: nbFiles;
+            font-size: 13px;
+            horizontal-alignment: left;
+            color: Colors.primary-50;
+        }
+    
+        FaIcon {
+            icon: "weight-hanging";
+            style: "duotone";
+            icon-size: 16px;
+            primary-color: Colors.primary-30;
+            secondary-color: Colors.primary-20;
+        }
+        
+        Text {
+            text: size;
+            font-size: 13px;
+            horizontal-alignment: left;
+            color: Colors.primary-50;
+        }
+
+        FaIcon {
+            icon: "clock";
+            style: "duotone";
+            icon-size: 16px;
+            primary-color: Colors.primary-30;
+            secondary-color: Colors.primary-20;
+        }
+
+        Text {
+            text: duration;
+            font-size: 13px;
+            horizontal-alignment: left;
+            color: Colors.primary-50;
+        }
+
+    }
+}
