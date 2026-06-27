@@ -10,6 +10,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { FileInfos } from "infos/file_infos.slint";
 import { FolderInfos } from "infos/folder_infos.slint";
 import { VolumeInfos } from "infos/volume_infos.slint";
+import { Help } from "help/help.slint";
 
 export { TreeItem, IconLoader, Colors }
 
@@ -25,7 +26,9 @@ export component MainWindow inherits Window {
     callback open_selected();
     callback navigate_back();
     callback cycle_theme();
+    callback toggle_help();
 
+    in-out property <bool> help_visible: false;
     in-out property <[TreeItem]> tree;
     in-out property <int> selected_index: 0;
     in-out property <length> scroll_offset: 0px;
@@ -131,6 +134,10 @@ export component MainWindow inherits Window {
             keys: @keys(T);
             activated => root.cycle_theme();
         }
+        KeyBinding {
+            keys: @keys(H);
+            activated => root.toggle_help();
+        }
 
         VerticalLayout {
             Rectangle {
@@ -212,5 +219,7 @@ export component MainWindow inherits Window {
                 }
             }
         }
+
+        if help_visible : Help {}
     }
 }

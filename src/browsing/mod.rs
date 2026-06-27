@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::debug;
 use crate::structs::FolderNode;
 use crate::ui::TreeItem;
 use crate::utils::flatten_along_path;
@@ -62,6 +63,27 @@ impl BrowsingState {
         true
     }
 
+    /// Replace the library tree after a rescan, keeping navigation when paths still exist.
+    pub fn reload_tree(&mut self, new_tree: FolderNode) {
+        let selected_path = self
+            .visible
+            .get(self.selected)
+            .map(|item| item.path.clone());
+        let stack_before = self.stack.len();
+        self.tree = new_tree;
+        prune_stack(&self.tree, &mut self.stack);
+        self.rebuild_visible();
+        if let Some(path) = selected_path {
+            self.select_path(Path::new(path.as_str()));
+        }
+        debug::refresh(format!(
+            "reload_tree: stack {stack_before} -> {}, selected={}, visible={}",
+            self.stack.len(),
+            self.selected,
+            self.visible.len()
+        ));
+    }
+
     pub fn open_selected(&mut self) -> bool {
         let Some(target) = self.selected_folder_path() else {
             return false;
@@ -111,6 +133,19 @@ impl BrowsingState {
             return None;
         }
         Some(PathBuf::from(item.path.as_str()))
+    }
+}
+
+fn prune_stack(tree: &FolderNode, stack: &mut Vec<PathBuf>) {
+    while !stack.is_empty() {
+        let Some(last) = stack.last() else {
+            return;
+        };
+        if let Some(valid_stack) = stack_for_folder(tree, last) {
+            *stack = valid_stack;
+            return;
+        }
+        stack.pop();
     }
 }
 
@@ -225,6 +260,61 @@ mod tests {
         assert!(state.open_selected());
         assert_eq!(state.stack.len(), 1);
         assert_eq!(state.visible_items().len(), 2);
+    }
+
+    #[test]
+    fn reload_tree_preserves_open_path_and_selection() {
+        let tree = library(vec![folder(
+            "/volumeD",
+            "volumeD",
+            vec![
+                folder("/volumeD/mkv", "mkv", vec![]),
+                folder("/volumeD/mp4", "mp4", vec![]),
+            ],
+        )]);
+        let mut state = BrowsingState::new(tree);
+
+        state.selected = 0;
+        state.open_selected();
+        state.selected = 2;
+        assert_eq!(state.visible_items()[state.selected].name, "mp4");
+
+        let updated = library(vec![folder(
+            "/volumeD",
+            "volumeD",
+            vec![
+                folder("/volumeD/mkv", "mkv", vec![]),
+                folder("/volumeD/mp4", "mp4", vec![]),
+                folder("/volumeD/avi", "avi", vec![]),
+            ],
+        )]);
+        state.reload_tree(updated);
+
+        assert_eq!(state.stack.len(), 1);
+        assert_eq!(state.visible_items().len(), 4);
+        assert_eq!(state.visible_items()[state.selected].name, "mp4");
+    }
+
+    #[test]
+    fn reload_tree_prunes_stack_when_open_folder_removed() {
+        let tree = library(vec![folder(
+            "/volumeD",
+            "volumeD",
+            vec![folder("/volumeD/mkv", "mkv", vec![])],
+        )]);
+        let mut state = BrowsingState::new(tree);
+
+        state.open_selected();
+        state.selected = 1;
+        state.open_selected();
+        assert_eq!(state.stack.len(), 2);
+
+        let updated = library(vec![folder("/volumeD", "volumeD", vec![])]);
+        state.reload_tree(updated);
+
+        assert_eq!(state.stack.len(), 1);
+        assert_eq!(state.stack[0], PathBuf::from("/volumeD"));
+        assert_eq!(state.visible_items().len(), 1);
     }
 
     #[test]

@@ -1,0 +1,260 @@
+import { Colors } from "../../theme/colors.slint";
+import { Spacing, BorderRadius } from "../../theme/spacing.slint";
+
+export component Help inherits Rectangle {
+    in property <string> name;
+    in property <string> bitrate;
+    in property <string> size;
+    in property <string> duration;
+    in property <string> format;
+    in property <string> codec;
+
+    background: rgba(0, 0, 0, 0.6);
+    
+    width: 100%;
+    height: 100%;
+    
+    Rectangle {
+        
+        width: parent.width - 64px;
+        height: parent.height - 64px;
+        background: Colors.primary-10;
+        border-color: Colors.primary-50;
+        border-width: 3px;
+        border-radius: BorderRadius.l;
+        padding-top: Spacing.s;
+
+        VerticalLayout {
+            cross-axis-alignment: center;
+            alignment: LayoutAlignment.start;
+            spacing: Spacing.s;
+            padding-left: Spacing.m;
+            
+            Rectangle {
+                Text {
+                    text: "HELP";
+                    font-size: 13px;
+                    color: Colors.primary-50;
+                }
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                width: 80%;
+
+                VerticalLayout {
+                    width: 100%;
+                    alignment: start;
+                    cross-axis-alignment: center;
+                    spacing: Spacing.m;
+                    padding-left: Spacing.m;
+                    
+                    Rectangle {
+                        width: 100%;
+                        height: 32px;
+                        horizontal-stretch: 1;
+
+                        HorizontalLayout {
+                            alignment: LayoutAlignment.center;
+                            cross-axis-alignment: center;
+                            spacing: Spacing.l;
+
+                            Rectangle {
+                                width:30%;
+
+                                HorizontalLayout {
+                                    spacing: Spacing.m;
+                                    alignment: LayoutAlignment.end;
+
+                                    Text {
+                                        text: "[ H ]";
+                                        font-size: 13px;
+                                        color: Colors.primary-50;
+                                    }
+                                }
+                            }
+                            Rectangle {
+                                width:70%;
+                                
+                                HorizontalLayout {
+                                    spacing: Spacing.m;
+                                    alignment: LayoutAlignment.start;
+
+                                    Text {
+                                        text: "Help";
+                                        font-size: 13px;
+                                        color: Colors.primary-50;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                width: 80%;
+
+                VerticalLayout {
+                    width: 100%;
+                    alignment: start;
+                    cross-axis-alignment: center;
+                    spacing: Spacing.m;
+                    padding-left: Spacing.m;
+                    
+                    Rectangle {
+                        width: 100%;
+                        height: 32px;
+                        horizontal-stretch: 1;
+
+                        HorizontalLayout {
+                            alignment: LayoutAlignment.center;
+                            cross-axis-alignment: center;
+                            spacing: Spacing.l;
+
+                            Rectangle {
+                                width:30%;
+
+                                HorizontalLayout {
+                                    spacing: Spacing.m;
+                                    alignment: LayoutAlignment.end;
+
+                                    Text {
+                                        text: "[ \u{2191} \u{2193} ]";
+                                        font-size: 13px;
+                                        font-family: "Arial";
+                                        color: Colors.primary-50;
+                                    }
+                                }
+                            }
+                            Rectangle {
+                                width:70%;
+                                
+                                HorizontalLayout {
+                                    spacing: Spacing.m;
+                                    alignment: LayoutAlignment.start;
+
+                                    Text {
+                                        text: "Naviagate Up / Down";
+                                        font-size: 13px;
+                                        color: Colors.primary-50;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                width: 80%;
+
+                VerticalLayout {
+                    width: 100%;
+                    alignment: start;
+                    cross-axis-alignment: center;
+                    spacing: Spacing.m;
+                    padding-left: Spacing.m;
+                    
+                    Rectangle {
+                        width: 100%;
+                        height: 32px;
+                        horizontal-stretch: 1;
+
+                        HorizontalLayout {
+                            alignment: LayoutAlignment.center;
+                            cross-axis-alignment: center;
+                            spacing: Spacing.l;
+
+                            Rectangle {
+                                width:30%;
+
+                                HorizontalLayout {
+                                    spacing: Spacing.m;
+                                    alignment: LayoutAlignment.end;
+
+                                    Text {
+                                        text: "[ \u{2190} \u{2192} ]";
+                                        font-size: 13px;
+                                        font-family: "Arial";
+                                        color: Colors.primary-50;
+                                    }
+                                }
+                            }
+                            Rectangle {
+                                width:70%;
+                                
+                                HorizontalLayout {
+                                    spacing: Spacing.m;
+                                    alignment: LayoutAlignment.start;
+
+                                    Text {
+                                        text: "Open / Close";
+                                        font-size: 13px;
+                                        color: Colors.primary-50;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+                width: 80%;
+
+                VerticalLayout {
+                    width: 100%;
+                    alignment: start;
+                    cross-axis-alignment: center;
+                    spacing: Spacing.m;
+                    padding-left: Spacing.m;
+                    
+                    Rectangle {
+                        width: 100%;
+                        height: 32px;
+                        horizontal-stretch: 1;
+
+                        HorizontalLayout {
+                            alignment: LayoutAlignment.center;
+                            cross-axis-alignment: center;
+                            spacing: Spacing.l;
+
+                            Rectangle {
+                                width:30%;
+
+                                HorizontalLayout {
+                                    spacing: Spacing.m;
+                                    alignment: LayoutAlignment.end;
+
+                                    Text {
+                                        text: "[ T ]";
+                                        font-size: 13px;
+                                        color: Colors.primary-50;
+                                    }
+                                }
+                            }
+                            Rectangle {
+                                width:70%;
+                                
+                                HorizontalLayout {
+                                    spacing: Spacing.m;
+                                    alignment: LayoutAlignment.start;
+
+                                    Text {
+                                        text: "Change theme";
+                                        font-size: 13px;
+                                        color: Colors.primary-50;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

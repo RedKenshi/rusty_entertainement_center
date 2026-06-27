@@ -1,7 +1,10 @@
 //! Filesystem scanner: turns directories on disk into an in-memory `FolderNode` tree.
 //!
-//! This module runs once at startup (phase 2). It does not handle navigation or UI state —
-//! that lives in `browsing`. Output is a static library tree consumed by `utils::flatten_along_path`.
+//! It does not handle navigation or UI state — that lives in `browsing`. Rescanning is
+//! triggered by `watch` when the filesystem changes.
+
+/// Project root (compile-time path). Scans and watches stay correct regardless of process cwd.
+pub const WORKSPACE: &str = env!("CARGO_MANIFEST_DIR");
 
 use std::collections::HashMap;
 use std::path::Path;
