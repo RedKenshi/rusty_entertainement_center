@@ -1,15 +1,8 @@
 mod app;
-mod probe;
 
 mod icons;
 
 mod structs;
-
-mod browser;
-use browser::*;
-
-mod browsing;
-use browsing::BrowsingState;
 
 mod debug;
 
@@ -24,6 +17,7 @@ mod watch;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use app::{build_volume_library, wire_up, BrowsingState, WORKSPACE};
 use slint::ComponentHandle;
 
 fn main() -> Result<(), slint::PlatformError> {
@@ -35,7 +29,7 @@ fn main() -> Result<(), slint::PlatformError> {
 /*     #[cfg(debug_assertions)]
     debug::print_folder(&state.borrow().tree); */
 
-    app::wire_up(&window, state);
+    wire_up(&window, state);
 
     window.run()?;
 

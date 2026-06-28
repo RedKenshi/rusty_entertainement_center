@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use walkdir::WalkDir;
 
-use crate::probe::probe_video;
+use super::probe::probe_video;
 use crate::structs::{FileMetadata, FileNode, FolderNode};
 
 /// File extensions treated as playable video files. Everything else is ignored.

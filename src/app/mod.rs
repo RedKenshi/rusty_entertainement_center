@@ -3,6 +3,13 @@
 //! `browsing/` holds navigation logic; `ui/` holds markup. This module owns
 //! the wiring between them and is the right place for new handlers (help, player, …).
 
+mod browser;
+mod browsing;
+mod probe;
+
+pub use self::browser::{build_volume_library, WORKSPACE};
+pub use self::browsing::BrowsingState;
+
 use std::cell::RefCell;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::rc::Rc;
@@ -13,8 +20,6 @@ use std::time::{Duration, Instant};
 
 use slint::{ComponentHandle, Global, ModelRc, Timer, TimerMode, VecModel};
 
-use crate::browser::{build_volume_library, WORKSPACE};
-use crate::browsing::BrowsingState;
 use crate::debug;
 use crate::icons;
 use crate::structs::FolderNode;

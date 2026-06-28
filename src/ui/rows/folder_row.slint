@@ -24,8 +24,8 @@ export component FolderRow inherits Rectangle {
                 icon: expanded ? "folder-open" : "folder";
                 style: "duotone";
                 icon-size: 16px;
-                primary-color: Colors.primary-50;
-                secondary-color: expanded ? Colors.primary-30 : Colors.primary-50;
+                primary-color: Colors.primary-70;
+                secondary-color: expanded ? Colors.primary-30 : Colors.primary-70;
             }
 
             Text {
@@ -33,7 +33,7 @@ export component FolderRow inherits Rectangle {
                 text: "[" + name + "]";
                 horizontal-stretch: 1;
                 horizontal-alignment: left;
-                color: selected ? Colors.primary-70 : Colors.primary-50;
+                color: selected ? Colors.primary-70 : Colors.primary-70;
             }
         }
 
@@ -44,15 +44,15 @@ export component FolderRow inherits Rectangle {
                 text: nbFiles;
                 font-size: 12px;
                 horizontal-alignment: right;
-                color: selected ? Colors.primary-50 : Colors.primary-20;
+                color: selected ? Colors.primary-70 : Colors.primary-20;
             }
             
             FaIcon {
                 icon: "files";
                 style: "duotone";
                 icon-size: 16px;
-                primary-color: selected ? Colors.primary-70 : Colors.primary-50;
-                secondary-color: selected ? Colors.primary-50 : Colors.primary-30;
+                primary-color: selected ? Colors.primary-70 : Colors.primary-70;
+                secondary-color: selected ? Colors.primary-70 : Colors.primary-30;
             }
         }
     }
