@@ -5,6 +5,13 @@ use crate::structs::FolderNode;
 use crate::ui::TreeItem;
 use crate::utils::flatten_along_path;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActivateResult {
+    None,
+    OpenedFolder,
+    PlayFile { path: PathBuf, name: String },
+}
+
 pub struct BrowsingState {
     pub tree: FolderNode,
     pub stack: Vec<PathBuf>,
@@ -103,6 +110,38 @@ impl BrowsingState {
         true
     }
 
+    /// Open a folder/volume, or return a file path when the selection is a video file.
+    pub fn activate_selected(&mut self) -> ActivateResult {
+        if let Some(item) = self.visible.get(self.selected) {
+            if !item.is_folder && !item.is_volume {
+                return ActivateResult::PlayFile {
+                    path: PathBuf::from(item.path.as_str()),
+                    name: item.name.to_string(),
+                };
+            }
+        }
+
+        if self.open_selected() {
+            ActivateResult::OpenedFolder
+        } else {
+            ActivateResult::None
+        }
+    }
+
+    pub fn file_duration_ms(&self, path: &Path) -> Option<u64> {
+        find_file(&self.tree, path)
+            .and_then(|file| file.metadata.as_ref())
+            .and_then(|metadata| metadata.duration_ms)
+    }
+
+    fn selected_folder_path(&self) -> Option<PathBuf> {
+        let item = self.visible.get(self.selected)?;
+        if !item.is_folder && !item.is_volume {
+            return None;
+        }
+        Some(PathBuf::from(item.path.as_str()))
+    }
+
     fn rebuild_visible(&mut self) {
         let mut items = Vec::new();
         flatten_along_path(&self.tree, &self.stack, &mut items);
@@ -126,14 +165,32 @@ impl BrowsingState {
             .unwrap_or(0);
         self.apply_selection();
     }
+}
 
-    fn selected_folder_path(&self) -> Option<PathBuf> {
-        let item = self.visible.get(self.selected)?;
-        if !item.is_folder && !item.is_volume {
-            return None;
+fn find_file<'a>(tree: &'a FolderNode, path: &Path) -> Option<&'a crate::structs::FileNode> {
+    for volume in &tree.subfolders {
+        if let Some(file) = find_file_in_folder(volume, path) {
+            return Some(file);
         }
-        Some(PathBuf::from(item.path.as_str()))
     }
+    None
+}
+
+fn find_file_in_folder<'a>(
+    folder: &'a FolderNode,
+    path: &Path,
+) -> Option<&'a crate::structs::FileNode> {
+    for file in &folder.files {
+        if file.path == path {
+            return Some(file);
+        }
+    }
+    for subfolder in &folder.subfolders {
+        if let Some(file) = find_file_in_folder(subfolder, path) {
+            return Some(file);
+        }
+    }
+    None
 }
 
 fn prune_stack(tree: &FolderNode, stack: &mut Vec<PathBuf>) {
@@ -176,7 +233,7 @@ fn build_stack_recursive(node: &FolderNode, target: &Path, stack: &mut Vec<PathB
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::structs::FolderNode;
+    use crate::structs::{FileNode, FolderNode};
 
     fn folder(path: &str, name: &str, subfolders: Vec<FolderNode>) -> FolderNode {
         FolderNode {
@@ -315,6 +372,54 @@ mod tests {
         assert_eq!(state.stack.len(), 1);
         assert_eq!(state.stack[0], PathBuf::from("/volumeD"));
         assert_eq!(state.visible_items().len(), 1);
+    }
+
+    #[test]
+    fn activate_selected_returns_file_without_changing_stack() {
+        use crate::structs::FileMetadata;
+
+        let mkv_folder = FolderNode {
+            path: PathBuf::from("/volumeD/mkv"),
+            name: "mkv".into(),
+            subfolders: vec![],
+            files: vec![FileNode {
+                path: PathBuf::from("/volumeD/mkv/video.mkv"),
+                name: "video".into(),
+                format: "MKV".into(),
+                metadata: Some(FileMetadata {
+                    size: Some(100),
+                    duration_ms: Some(120_000),
+                    bitrate: None,
+                    codec: None,
+                    width: None,
+                    height: None,
+                }),
+            }],
+            reduced_number_of_file: 1,
+            reduced_size_of_files: 100,
+            reduced_duration_of_files: 120_000,
+        };
+        let tree = library(vec![folder("/volumeD", "volumeD", vec![mkv_folder])]);
+        let mut state = BrowsingState::new(tree);
+
+        state.selected = 0;
+        state.open_selected();
+        state.selected = 1;
+        state.open_selected();
+        state.selected = 2;
+
+        match state.activate_selected() {
+            ActivateResult::PlayFile { path, name } => {
+                assert_eq!(path, PathBuf::from("/volumeD/mkv/video.mkv"));
+                assert_eq!(name, "video");
+            }
+            other => panic!("expected PlayFile, got {other:?}"),
+        }
+        assert_eq!(state.stack.len(), 2);
+        assert_eq!(
+            state.file_duration_ms(Path::new("/volumeD/mkv/video.mkv")),
+            Some(120_000)
+        );
     }
 
     #[test]

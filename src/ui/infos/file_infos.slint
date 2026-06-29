@@ -9,6 +9,7 @@ export component FileInfos inherits Rectangle {
     in property <string> duration;
     in property <string> format;
     in property <string> codec;
+    in property <string> resolution;
 
     horizontal-stretch: 1;
     background: Colors.primary-10;
@@ -58,6 +59,21 @@ export component FileInfos inherits Rectangle {
         }
 
         Text {
+            text: resolution;
+            font-size: 13px;
+            
+            color: Colors.primary-70;
+        }
+
+        FaIcon {
+            icon: "grip-dots-vertical";
+            style: "duotone";
+            icon-size: 16px;
+            primary-color: Colors.primary-30;
+            secondary-color: Colors.primary-20;
+        }
+
+        Text {
             text: bitrate;
             font-size: 13px;
             
@@ -78,21 +94,5 @@ export component FileInfos inherits Rectangle {
             
             color: Colors.primary-70;
         }
-
-        FaIcon {
-            icon: "grip-dots-vertical";
-            style: "duotone";
-            icon-size: 16px;
-            primary-color: Colors.primary-30;
-            secondary-color: Colors.primary-20;
-        }
-
-        Text {
-            text: duration;
-            font-size: 13px;
-            
-            color: Colors.primary-70;
-        }
-
     }
 }

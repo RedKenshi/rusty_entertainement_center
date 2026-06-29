@@ -12,6 +12,7 @@ pub mod reconcile;
 mod settings_repository;
 
 pub use database::Database;
+pub use media_repository::{MediaState, MediaStateRepository, SqliteMediaRepository};
 
 pub type Result<T> = std::result::Result<T, sqlx::Error>;
 

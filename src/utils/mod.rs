@@ -9,6 +9,7 @@ pub fn volume_to_tree_item(volume: &FolderNode, expanded: bool, selected: bool) 
         format: "volume".into(),
         codec: String::new().into(),
         bitrate: String::new().into(),
+        resolution: String::new().into(),
         size: String::new().into(),
         indent: 0,
         is_folder: false,
@@ -33,6 +34,7 @@ pub fn folder_to_tree_item(
         format: "folder".into(),
         codec: String::new().into(),
         bitrate: String::new().into(),
+        resolution: String::new().into(),
         size: String::new().into(),
         indent,
         is_folder: true,
@@ -57,6 +59,11 @@ pub fn file_to_tree_item(file: &FileNode, indent: i32, selected: bool) -> TreeIt
         format: file.format.clone().into(),
         codec: codec.into(),
         bitrate: format_bitrate(metadata.and_then(|metadata| metadata.bitrate)).into(),
+        resolution: format_resolution(
+            metadata.and_then(|metadata| metadata.width),
+            metadata.and_then(|metadata| metadata.height),
+        )
+        .into(),
         size: format_file_size(metadata.and_then(|m| m.size)).into(),
         indent,
         is_folder: false,
@@ -122,6 +129,54 @@ fn emit_folder_contents(folder: &FolderNode, indent: i32, out: &mut Vec<TreeItem
     }
     for file in &folder.files {
         out.push(file_to_tree_item(file, indent, false));
+    }
+}
+
+pub fn format_playback_time(ms: u64) -> String {
+    let total_secs = ms / 1000;
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
+    }
+}
+
+const RESUME_END_MARGIN_MS: u64 = 30_000;
+
+/// Resume position to persist, or `None` if playback is close enough to the end.
+pub fn resume_position_to_store(position_ms: u64, duration_ms: Option<u64>) -> Option<u64> {
+    let Some(duration) = duration_ms.filter(|d| *d > 0) else {
+        return Some(position_ms);
+    };
+
+    if position_ms * 100 > duration * 95 {
+        return None;
+    }
+    if duration.saturating_sub(position_ms) < RESUME_END_MARGIN_MS {
+        return None;
+    }
+
+    Some(position_ms)
+}
+
+pub fn format_playback_clock(position_ms: u64, duration_ms: Option<u64>) -> String {
+    match duration_ms {
+        Some(duration) => format!(
+            "{} / {}",
+            format_playback_time(position_ms),
+            format_playback_time(duration)
+        ),
+        None => format_playback_time(position_ms),
+    }
+}
+
+pub fn format_resolution(width: Option<u32>, height: Option<u32>) -> String {
+    match (width, height) {
+        (Some(w), Some(h)) => format!("{w}x{h}"),
+        _ => String::new(),
     }
 }
 
@@ -209,6 +264,8 @@ mod tests {
                 duration_ms: None,
                 bitrate: Some(8_500_000),
                 codec: Some("HEVC".to_string()),
+                width: None,
+                height: None,
             }),
         }
     }
@@ -242,6 +299,35 @@ mod tests {
         assert_eq!(format_bitrate(None), "");
         assert_eq!(format_bitrate(Some(850_000)), "  850 kb/s");
         assert_eq!(format_bitrate(Some(8_500_000)), "  8.5 Mb/s");
+    }
+
+    #[test]
+    fn format_resolution_renders_width_and_height() {
+        assert_eq!(super::format_resolution(Some(1920), Some(1080)), "1920x1080");
+        assert_eq!(super::format_resolution(None, Some(1080)), "");
+    }
+
+    #[test]
+    fn format_playback_time_renders_minutes_and_seconds() {
+        assert_eq!(super::format_playback_time(125_000), "2:05");
+        assert_eq!(super::format_playback_time(3_661_000), "1:01:01");
+    }
+
+    #[test]
+    fn resume_position_to_store_clears_near_end() {
+        assert_eq!(super::resume_position_to_store(0, Some(120_000)), Some(0));
+        assert_eq!(super::resume_position_to_store(60_000, Some(120_000)), Some(60_000));
+        assert_eq!(super::resume_position_to_store(115_001, Some(120_000)), None);
+        assert_eq!(super::resume_position_to_store(91_000, Some(120_000)), None);
+        assert_eq!(super::resume_position_to_store(50_000, None), Some(50_000));
+    }
+
+    #[test]
+    fn format_playback_clock_renders_elapsed_and_total() {
+        assert_eq!(
+            super::format_playback_clock(125_000, Some(300_000)),
+            "2:05 / 5:00"
+        );
     }
 
     #[test]

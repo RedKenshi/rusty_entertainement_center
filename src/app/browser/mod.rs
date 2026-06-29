@@ -135,6 +135,8 @@ pub fn build_tree(root: &str) -> FolderNode {
                 duration_ms: probe.duration_ms,
                 bitrate: probe.bitrate,
                 codec: probe.codec,
+                width: probe.width,
+                height: probe.height,
             }),
         };
 
@@ -232,6 +234,8 @@ mod tests {
                 duration_ms: Some(duration_ms),
                 bitrate: None,
                 codec: None,
+                width: None,
+                height: None,
             }),
         }
     }

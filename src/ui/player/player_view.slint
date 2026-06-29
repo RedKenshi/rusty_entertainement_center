@@ -1,0 +1,81 @@
+import { Colors } from "../../theme/colors.slint";
+import { Spacing, BorderRadius } from "../../theme/spacing.slint";
+
+export component PlayerView inherits VerticalLayout {
+    in property <string> title;
+    in property <string> time-progress: "0:00";
+    in property <string> duration: "0:00";
+    in property <float> progress;
+    in property <bool> playing;
+
+    spacing: 0;
+    padding: Spacing.l;
+
+    //Rectangle {
+    //    width: parent.width;
+    //    height: 2px;
+    //    background: Colors.primary-40;
+    //}
+
+    Rectangle {
+        border-color: Colors.primary-40;
+        border-width: 2px;
+        border-radius: BorderRadius.m;
+        width: parent.width - 2 * Spacing.l;
+        background: Colors.primary-5;
+
+        VerticalLayout {
+            spacing: Spacing.m;
+            padding: Spacing.m;
+            padding-top: Spacing.s;
+
+            Text {
+                text: root.title;
+                color: Colors.primary-90;
+                font-size: 16px;
+                overflow: elide;
+                horizontal-alignment: left;
+            }
+
+            HorizontalLayout {
+                spacing: Spacing.m;
+                alignment: stretch;
+                cross-axis-alignment: center;
+
+                Text {
+                    text: root.playing ? ">" : "II";
+                    color: Colors.primary-50;
+                    font-size: 12px;
+                }
+
+                Text {
+                    text: root.time-progress;
+                    color: Colors.primary-70;
+                    font-size: 13px;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                    height: 10px;
+                    background: Colors.primary-20;
+                    border-radius: 2px;
+
+                    Rectangle {
+                        x: 0;
+                        y: 0;
+                        width: parent.width * root.progress;
+                        height: parent.height;
+                        background: Colors.primary-50;
+                        border-radius: 2px;
+                    }
+                }
+
+                Text {
+                    text: root.duration;
+                    color: Colors.primary-70;
+                    font-size: 13px;
+                }
+            }
+        }
+    }
+}

@@ -1,4 +1,4 @@
-#![allow(dead_code)] // wired when favorites / playback land in the UI
+#![allow(dead_code)] // favorite toggle lands in a later UI pass
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};

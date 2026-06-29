@@ -6,6 +6,7 @@ use sqlx::{Pool, Sqlite};
 use tokio::runtime::Runtime;
 
 use super::connection;
+use super::media_repository::SqliteMediaRepository;
 use super::migrations;
 use super::settings_repository::SqliteSettingsRepository;
 use super::Result;
@@ -22,6 +23,7 @@ fn database_url(path: impl AsRef<Path>) -> String {
 pub struct Database {
     runtime: Arc<Runtime>,
     pool: Pool<Sqlite>,
+    media: SqliteMediaRepository,
     settings: SqliteSettingsRepository,
 }
 
@@ -41,6 +43,7 @@ impl Database {
             Ok::<_, sqlx::Error>(pool)
         })?;
 
+        let media = SqliteMediaRepository::new(pool.clone());
         let settings = SqliteSettingsRepository::new(pool.clone());
 
         debug::db("database ready");
@@ -48,12 +51,17 @@ impl Database {
         Ok(Self {
             runtime,
             pool,
+            media,
             settings,
         })
     }
 
     pub fn pool(&self) -> &Pool<Sqlite> {
         &self.pool
+    }
+
+    pub fn media(&self) -> &SqliteMediaRepository {
+        &self.media
     }
 
     pub fn settings(&self) -> &SqliteSettingsRepository {
@@ -65,5 +73,13 @@ impl Database {
         F: Future,
     {
         self.runtime.block_on(future)
+    }
+
+    pub fn spawn<F>(&self, future: F)
+    where
+        F: Future + Send + 'static,
+        F::Output: Send,
+    {
+        self.runtime.spawn(future);
     }
 }

@@ -13,6 +13,8 @@ pub struct VideoProbe {
     pub duration_ms: Option<u64>,
     pub bitrate: Option<u32>,
     pub codec: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
 }
 
 fn ffprobe_available() -> bool {
@@ -44,7 +46,7 @@ pub fn probe_video(path: &Path) -> VideoProbe {
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=codec_name,bit_rate",
+            "stream=codec_name,bit_rate,width,height",
             "-show_entries",
             "format=duration,bit_rate",
             "-of",
@@ -85,6 +87,12 @@ fn parse_ffprobe_output(output: &str) -> VideoProbe {
                     bitrates.push(bps);
                 }
             }
+            "width" if probe.width.is_none() => {
+                probe.width = parse_dimension(value);
+            }
+            "height" if probe.height.is_none() => {
+                probe.height = parse_dimension(value);
+            }
             _ => {}
         }
     }
@@ -109,6 +117,13 @@ fn parse_bitrate(value: &str) -> Option<u32> {
     value.parse::<u64>().ok().and_then(|bps| u32::try_from(bps).ok())
 }
 
+fn parse_dimension(value: &str) -> Option<u32> {
+    if value.eq_ignore_ascii_case("N/A") {
+        return None;
+    }
+    value.parse::<u32>().ok().filter(|pixels| *pixels > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,7 +139,7 @@ mod tests {
     #[test]
     fn parse_ffprobe_output_reads_codec_duration_and_format_bitrate() {
         let probe = parse_ffprobe_output(
-            "codec_name=hevc\nbit_rate=8500000\nduration=5432.100000\nbit_rate=9200000\n",
+            "codec_name=hevc\nwidth=3840\nheight=2160\nbit_rate=8500000\nduration=5432.100000\nbit_rate=9200000\n",
         );
 
         assert_eq!(
@@ -133,6 +148,8 @@ mod tests {
                 duration_ms: Some(5_432_100),
                 bitrate: Some(9_200_000),
                 codec: Some("HEVC".to_string()),
+                width: Some(3840),
+                height: Some(2160),
             }
         );
     }
@@ -147,6 +164,8 @@ mod tests {
                 duration_ms: None,
                 bitrate: Some(4_500_000),
                 codec: Some("H264".to_string()),
+                width: None,
+                height: None,
             }
         );
     }

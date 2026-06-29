@@ -28,4 +28,6 @@ pub struct FileMetadata {
     pub duration_ms: Option<u64>,
     pub bitrate: Option<u32>,
     pub codec: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
 }

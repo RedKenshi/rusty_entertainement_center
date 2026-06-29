@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use app::{build_volume_library, wire_up, BrowsingState, WORKSPACE};
 use db::{Database, SettingsRepository};
-use slint::ComponentHandle;
+use slint::{BackendSelector, ComponentHandle};
 
 fn database_path() -> PathBuf {
     PathBuf::from(WORKSPACE).join("library.db")
@@ -33,6 +33,11 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     debug::refresh(format!("starting app, workspace={WORKSPACE}"));
+
+    BackendSelector::new()
+        .require_opengl()
+        .select()
+        .expect("OpenGL backend required for video playback");
 
     let database = Arc::new(
         Database::open(database_path()).expect("failed to open database"),

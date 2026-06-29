@@ -11,13 +11,14 @@ import { FileInfos } from "infos/file_infos.slint";
 import { FolderInfos } from "infos/folder_infos.slint";
 import { VolumeInfos } from "infos/volume_infos.slint";
 import { Help } from "help/help.slint";
+import { PlayerView } from "player/player_view.slint";
 
 export { TreeItem, IconLoader, Colors }
 
 export component MainWindow inherits Window {
     width: 560px;
     height: 320px;
-    background: Colors.primary-5;
+    background: root.player_active ? #000000 : Colors.primary-5;
     default-font-family: "Pixelify Sans";
     default-font-size: 15px;
     default-font-weight: 600;
@@ -28,10 +29,23 @@ export component MainWindow inherits Window {
     callback cycle_theme();
     callback toggle_help();
 
+    callback playback_toggle_pause();
+    callback playback_seek_backward();
+    callback playback_seek_forward();
+    callback playback_stop();
+
     in-out property <bool> help_visible: false;
+    in-out property <bool> player_active: false;
     in-out property <[TreeItem]> tree;
     in-out property <int> selected_index: 0;
     in-out property <length> scroll_offset: 0px;
+
+    in-out property <string> playback_title: "";
+    in-out property <string> playback_time_progress: "0:00";
+    in-out property <string> playback_duration: "0:00";
+    in-out property <float> playback_progress: 0;
+    in-out property <bool> playback_playing: false;
+    in-out property <image> playback_video;
 
     private property <length> top-space: 8px;
     private property <length> bottom-space: 80px;
@@ -49,7 +63,7 @@ export component MainWindow inherits Window {
         }
     }
 
-    private property <length> viewport-height: scroll_view.visible-height;
+    private property <length> viewport-height: root.height - 34px;
 
     private property <TreeItem> selected-item: root.tree.length > 0
         ? root.tree[clamp(root.selected_index, 0, root.tree.length - 1)]
@@ -58,6 +72,7 @@ export component MainWindow inherits Window {
             format: "",
             codec: "",
             bitrate: "",
+            resolution: "",
             size: "",
             indent: 0,
             is_folder: false,
@@ -100,126 +115,211 @@ export component MainWindow inherits Window {
         root.update-scroll-to-selection();
     }
 
-    FocusScope {
+    changed player_active => {
+        focus_scope.focus();
+    }
+
+    focus_scope := FocusScope {
         width: 100%;
         height: 100%;
         focus-on-click: true;
         focus-on-tab-navigation: true;
 
         KeyBinding {
-            keys: @keys(LeftArrow);
-            activated => root.navigate_back();
+            keys: @keys(Space);
+            activated => {
+                if root.player_active {
+                    root.playback_toggle_pause();
+                }
+            }
         }
         KeyBinding {
-            keys: @keys(Escape);
-            activated => root.navigate_back();
+            keys: @keys(LeftArrow);
+            activated => {
+                if root.player_active {
+                    root.playback_seek_backward();
+                } else {
+                    root.navigate_back();
+                }
+            }
         }
         KeyBinding {
             keys: @keys(RightArrow);
-            activated => root.open_selected();
+            activated => {
+                if root.player_active {
+                    root.playback_seek_forward();
+                } else {
+                    root.open_selected();
+                }
+            }
+        }
+        KeyBinding {
+            keys: @keys(Escape);
+            activated => {
+                if root.player_active {
+                    root.playback_stop();
+                } else {
+                    root.navigate_back();
+                }
+            }
         }
         KeyBinding {
             keys: @keys(Return);
-            activated => root.open_selected();
+            activated => {
+                if !root.player_active {
+                    root.open_selected();
+                }
+            }
         }
         KeyBinding {
             keys: @keys(UpArrow);
-            activated => root.move_selection(-1);
+            activated => {
+                if !root.player_active {
+                    root.move_selection(-1);
+                }
+            }
         }
         KeyBinding {
             keys: @keys(DownArrow);
-            activated => root.move_selection(1);
+            activated => {
+                if !root.player_active {
+                    root.move_selection(1);
+                }
+            }
         }
         KeyBinding {
             keys: @keys(T);
-            activated => root.cycle_theme();
+            activated => {
+                if !root.player_active {
+                    root.cycle_theme();
+                }
+            }
         }
         KeyBinding {
             keys: @keys(H);
-            activated => root.toggle_help();
+            activated => {
+                if !root.player_active {
+                    root.toggle_help();
+                }
+            }
         }
 
-        VerticalLayout {
-            Rectangle {
-                horizontal-stretch: 1;
-                scroll_view := ScrollView {
+        Rectangle {
+            width: 100%;
+            height: 100%;
+
+            if root.player_active: Rectangle {
+                width: 100%;
+                height: 100%;
+
+                Image {
                     width: 100%;
                     height: 100%;
-                    viewport-y: -root.scroll_offset;
+                    source: root.playback_video;
+                    image-fit: cover;
+                }
 
-                    VerticalLayout {
-                        width: parent.width;
-                        spacing: 0;
+                VerticalLayout {
+                    width: 100%;
+                    height: 100%;
+                    alignment: end;
 
-                        for item[index] in root.tree : VerticalLayout {
+                    PlayerView {
+                        width: 100%;
+                        title: root.playback_title;
+                        time-progress: root.playback_time_progress;
+                        duration: root.playback_duration;
+                        progress: root.playback_progress;
+                        playing: root.playback_playing;
+                    }
+                }
+            }
+
+            if !root.player_active: VerticalLayout {
+                width: 100%;
+                height: 100%;
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                    scroll_view := ScrollView {
+                        width: 100%;
+                        height: 100%;
+                        viewport-y: -root.scroll_offset;
+
+                        VerticalLayout {
                             width: parent.width;
                             spacing: 0;
 
-                            if index == 0 : SpaceRow {
+                            for item[index] in root.tree : VerticalLayout {
                                 width: parent.width;
-                                space-height: root.top-space;
-                            }
+                                spacing: 0;
 
-                            TreeRow {
-                                width: parent.width;
-                                item: item;
-                            }
+                                if index == 0 : SpaceRow {
+                                    width: parent.width;
+                                    space-height: root.top-space;
+                                }
 
-                            if index == root.tree.length - 1 : SpaceRow {
-                                width: parent.width;
-                                space-height: root.bottom-space;
+                                TreeRow {
+                                    width: parent.width;
+                                    item: item;
+                                }
+
+                                if index == root.tree.length - 1 : SpaceRow {
+                                    width: parent.width;
+                                    space-height: root.bottom-space;
+                                }
                             }
                         }
                     }
                 }
-            }
-            
-            Rectangle {
-                width: parent.width;
-                height: 2px;
-                background: Colors.primary-30;
-                
-            }
 
-            Rectangle {
-                width: parent.width;
-                height: 32px;
-
-                if root.tree.length > 0 && root.selected-item.is_volume : VolumeInfos {
-                    width: 100%;
-                    height: 100%;
-                    
-                    name: root.selected-item.name;
-                    size: root.selected-item.filesSize;
-                    duration: root.selected-item.filesDuration;
-                    nbFiles: root.selected-item.nbFiles;
+                Rectangle {
+                    width: parent.width;
+                    height: 2px;
+                    background: Colors.primary-30;
                 }
 
-                if root.tree.length > 0 && root.selected-item.is_folder && !root.selected-item.is_volume : FolderInfos {
-                    width: 100%;
-                    height: 100%;
+                Rectangle {
+                    width: parent.width;
+                    height: 32px;
 
-                    name: root.selected-item.name;
-                    size: root.selected-item.filesSize;
-                    duration: root.selected-item.filesDuration;
-                    nbFiles: root.selected-item.nbFiles;
-                }
+                    if root.tree.length > 0 && root.selected-item.is_volume : VolumeInfos {
+                        width: 100%;
+                        height: 100%;
 
-                if root.tree.length > 0 && !root.selected-item.is_folder && !root.selected-item.is_volume : FileInfos {
-                    width: 100%;
-                    height: 100%;
+                        name: root.selected-item.name;
+                        size: root.selected-item.filesSize;
+                        duration: root.selected-item.filesDuration;
+                        nbFiles: root.selected-item.nbFiles;
+                    }
 
-                    bitrate: root.selected-item.bitrate;
-                    format: root.selected-item.format;
-                    codec: root.selected-item.codec;
+                    if root.tree.length > 0 && root.selected-item.is_folder && !root.selected-item.is_volume : FolderInfos {
+                        width: 100%;
+                        height: 100%;
 
-                    name: root.selected-item.name;
-                    size: root.selected-item.size;
-                    duration: root.selected-item.filesDuration;
+                        name: root.selected-item.name;
+                        size: root.selected-item.filesSize;
+                        duration: root.selected-item.filesDuration;
+                        nbFiles: root.selected-item.nbFiles;
+                    }
+
+                    if root.tree.length > 0 && !root.selected-item.is_folder && !root.selected-item.is_volume : FileInfos {
+                        width: 100%;
+                        height: 100%;
+
+                        bitrate: root.selected-item.bitrate;
+                        format: root.selected-item.format;
+                        codec: root.selected-item.codec;
+                        resolution: root.selected-item.resolution;
+
+                        name: root.selected-item.name;
+                        size: root.selected-item.size;
+                        duration: root.selected-item.filesDuration;
+                    }
                 }
             }
+
+            if !root.player_active && help_visible : Help {}
         }
-
-        if help_visible : Help {}
     }
 }

@@ -5,31 +5,34 @@
 
 mod browser;
 mod browsing;
+mod player;
 mod probe;
 
 pub use self::browser::{build_volume_library, WORKSPACE};
-pub use self::browsing::BrowsingState;
+pub use self::browsing::{ActivateResult, BrowsingState};
 
 use std::cell::RefCell;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::Path;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use slint::{ComponentHandle, Global, ModelRc, Timer, TimerMode, VecModel};
 
-use crate::db::{self, Database};
+use crate::db::{self, Database, MediaState, MediaStateRepository};
 use crate::debug;
 use crate::icons;
+use self::player::{PlaybackState, PlaybackStatus, PlayerEvent, PlayerHandle, wire_mpv_video_layer};
 use crate::structs::FolderNode;
 use crate::theme;
 use crate::ui::{self, IconLoader, MainWindow};
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use crate::utils::{format_playback_time, resume_position_to_store};
 use crate::watch;
 
-/// Push the current browsing snapshot into Slint properties.
 fn sync_window(window: &MainWindow, state: &BrowsingState) {
     window.set_tree(ModelRc::new(VecModel::from(
         state.visible_items().to_vec(),
@@ -75,11 +78,20 @@ fn wire_theme(window: &MainWindow) {
     });
 }
 
-fn wire_navigation(window: &MainWindow, browsing_state: Rc<RefCell<BrowsingState>>) {
-    // Each handler gets its own Weak + Rc clone; `browsing_state` is never moved.
+fn wire_navigation(
+    window: &MainWindow,
+    browsing_state: Rc<RefCell<BrowsingState>>,
+    player: PlayerHandle,
+    database: Arc<Database>,
+    player_active: Rc<RefCell<bool>>,
+) {
     let window_weak = window.as_weak();
     let state = Rc::clone(&browsing_state);
+    let player_active_move = Rc::clone(&player_active);
     window.on_move_selection(move |delta| {
+        if *player_active_move.borrow() {
+            return;
+        }
         let Some(window) = window_weak.upgrade() else {
             return;
         };
@@ -94,18 +106,53 @@ fn wire_navigation(window: &MainWindow, browsing_state: Rc<RefCell<BrowsingState
 
     let window_weak = window.as_weak();
     let state = Rc::clone(&browsing_state);
+    let player = player.clone();
+    let database = Arc::clone(&database);
+    let player_active = Rc::clone(&player_active);
+    let player_active_open = Rc::clone(&player_active);
     window.on_open_selected(move || {
         let Some(window) = window_weak.upgrade() else {
             return;
         };
-        with_browsing(&state, &window, |browsing| {
-            browsing.open_selected();
-        });
+        if *player_active_open.borrow() {
+            return;
+        }
+
+        let activate = {
+            let mut browsing = state.borrow_mut();
+            let result = browsing.activate_selected();
+            if matches!(result, ActivateResult::OpenedFolder) {
+                sync_window(&window, &browsing);
+            }
+            result
+        };
+
+        match activate {
+            ActivateResult::PlayFile { path, name } => {
+                let duration_ms = {
+                    let browsing = state.borrow();
+                    browsing.file_duration_ms(&path)
+                };
+                let resume_ms =
+                    load_resume_position(&database, &path, duration_ms);
+                debug::player(format!(
+                    "open {} resume={resume_ms:?} duration={duration_ms:?}",
+                    path.display()
+                ));
+                player.open(path, name, resume_ms, duration_ms);
+                enter_player_mode(&window, &player_active_open);
+            }
+            ActivateResult::OpenedFolder | ActivateResult::None => {}
+        }
     });
 
     let window_weak = window.as_weak();
     let state = Rc::clone(&browsing_state);
+    let player_active = Rc::clone(&player_active);
     window.on_navigate_back(move || {
+        if *player_active.borrow() {
+            return;
+        }
         let Some(window) = window_weak.upgrade() else {
             return;
         };
@@ -115,10 +162,205 @@ fn wire_navigation(window: &MainWindow, browsing_state: Rc<RefCell<BrowsingState
     });
 }
 
+fn enter_player_mode(window: &MainWindow, player_active: &RefCell<bool>) {
+    *player_active.borrow_mut() = true;
+    window.set_player_active(true);
+    window.set_help_visible(false);
+    window.window().request_redraw();
+}
+
+fn exit_player_mode(window: &MainWindow, player_active: &RefCell<bool>) {
+    *player_active.borrow_mut() = false;
+    window.set_player_active(false);
+    window.set_playback_title("".into());
+    window.set_playback_time_progress("0:00".into());
+    window.set_playback_duration("0:00".into());
+    window.set_playback_progress(0.0);
+    window.set_playback_playing(false);
+    window.set_playback_video(slint::Image::default());
+}
+
+fn sync_playback_ui(window: &MainWindow, state: &PlaybackState) {
+    window.set_playback_title(state.title.clone().into());
+    window.set_playback_time_progress(format_playback_time(state.position_ms).into());
+    window.set_playback_duration(
+        format_playback_time(state.duration_ms.unwrap_or(0)).into(),
+    );
+    window.set_playback_progress(state.progress());
+    window.set_playback_playing(state.status == PlaybackStatus::Playing);
+}
+
+fn load_resume_position(
+    database: &Database,
+    path: &Path,
+    duration_ms: Option<u64>,
+) -> Option<u64> {
+    database
+        .block_on(async { database.media().get(path).await })
+        .ok()
+        .flatten()
+        .and_then(|state| state.resume_position_ms)
+        .and_then(|position_ms| resume_position_to_store(position_ms, duration_ms))
+}
+
+fn persist_resume(
+    database: &Database,
+    path: &Path,
+    position_ms: u64,
+    duration_ms: Option<u64>,
+) {
+    let path = path.to_path_buf();
+    let pool = database.pool().clone();
+    let resume_position_ms = resume_position_to_store(position_ms, duration_ms);
+    database.spawn(async move {
+        let media = db::SqliteMediaRepository::new(pool);
+        let mut state = media
+            .get(&path)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(MediaState {
+                path: path.clone(),
+                favorite: false,
+                resume_position_ms: None,
+                last_watched_at: None,
+            });
+        state.resume_position_ms = resume_position_ms;
+        state.last_watched_at = Some(SystemTime::now());
+        if let Err(err) = media.save(&state).await {
+            debug::db(format!("resume save failed: {err}"));
+        }
+    });
+}
+
+fn wire_player(
+    window: &MainWindow,
+    database: Arc<Database>,
+    player: PlayerHandle,
+    event_rx: mpsc::Receiver<PlayerEvent>,
+    player_active: Rc<RefCell<bool>>,
+) {
+    const SEEK_MS: i64 = 1_000;
+    const RESUME_SAVE_INTERVAL: Duration = Duration::from_secs(15);
+
+    let last_state = Rc::new(RefCell::new(PlaybackState::default()));
+
+    let player_toggle = player.clone();
+    window.on_playback_toggle_pause(move || {
+        player_toggle.toggle_pause();
+    });
+
+    let player_seek = player.clone();
+    window.on_playback_seek_backward(move || {
+        player_seek.seek_delta(-SEEK_MS);
+    });
+
+    let player_seek = player.clone();
+    window.on_playback_seek_forward(move || {
+        player_seek.seek_delta(SEEK_MS);
+    });
+
+    let window_weak_stop = window.as_weak();
+    let player_stop = player.clone();
+    let database_stop = Arc::clone(&database);
+    let player_active_stop = Rc::clone(&player_active);
+    let last_state_stop = Rc::clone(&last_state);
+    window.on_playback_stop(move || {
+        let Some(window) = window_weak_stop.upgrade() else {
+            return;
+        };
+        let snapshot = last_state_stop.borrow().clone();
+        if let Some(path) = snapshot.path.as_ref() {
+            persist_resume(
+                &database_stop,
+                path,
+                snapshot.position_ms,
+                snapshot.duration_ms,
+            );
+        }
+        player_stop.stop();
+        exit_player_mode(&window, &player_active_stop);
+    });
+
+    let window_weak = window.as_weak();
+    let database_timer = Arc::clone(&database);
+    let player_active_timer = Rc::clone(&player_active);
+    let mut last_status = PlaybackStatus::Stopped;
+    let mut last_resume_save = Instant::now();
+
+    let event_rx = event_rx;
+    let last_state_timer = Rc::clone(&last_state);
+    let timer = Rc::new(Timer::default());
+    let timer_keepalive = Rc::clone(&timer);
+    timer.start(TimerMode::Repeated, Duration::from_millis(100), move || {
+        let _keepalive = timer_keepalive.clone();
+        let Some(window) = window_weak.upgrade() else {
+            return;
+        };
+
+        while let Ok(event) = event_rx.try_recv() {
+            match event {
+                PlayerEvent::State(state) => {
+                    if *player_active_timer.borrow() {
+                        if last_status == PlaybackStatus::Playing
+                            && state.status == PlaybackStatus::Paused
+                        {
+                            if let Some(path) = state.path.as_ref() {
+                                persist_resume(
+                                    &database_timer,
+                                    path,
+                                    state.position_ms,
+                                    state.duration_ms,
+                                );
+                            }
+                        }
+                        last_status = state.status;
+                    }
+                    *last_state_timer.borrow_mut() = state;
+                }
+                PlayerEvent::Stopped => {
+                    let snapshot = last_state_timer.borrow().clone();
+                    if let Some(path) = snapshot.path.as_ref() {
+                        persist_resume(
+                            &database_timer,
+                            path,
+                            snapshot.position_ms,
+                            snapshot.duration_ms,
+                        );
+                    }
+                    exit_player_mode(&window, &player_active_timer);
+                    *last_state_timer.borrow_mut() = PlaybackState::default();
+                    last_status = PlaybackStatus::Stopped;
+                }
+            }
+        }
+
+        if !*player_active_timer.borrow() {
+            return;
+        }
+
+        let snapshot = last_state_timer.borrow().clone();
+        sync_playback_ui(&window, &snapshot);
+
+        if snapshot.status == PlaybackStatus::Playing
+            && last_resume_save.elapsed() >= RESUME_SAVE_INTERVAL
+        {
+            if let Some(path) = snapshot.path.as_ref() {
+                persist_resume(
+                    &database_timer,
+                    path,
+                    snapshot.position_ms,
+                    snapshot.duration_ms,
+                );
+            }
+            last_resume_save = Instant::now();
+        }
+    });
+}
+
 fn wire_help(window: &MainWindow) {
     let mut help_active: bool = false;
-    
-    // Weak ref: the window stores this callback, so a strong ref would leak.
+
     let window_weak = window.as_weak();
     window.on_toggle_help(move || {
         let Some(window) = window_weak.upgrade() else {
@@ -258,10 +500,32 @@ pub fn wire_up(
     state: Rc<RefCell<BrowsingState>>,
     database: Arc<Database>,
 ) {
+    let (player, command_rx, event_tx, event_rx) = PlayerHandle::spawn();
+    let player_active = Rc::new(RefCell::new(false));
+
     wire_icons(window);
     sync_window(window, &state.borrow());
     wire_theme(window);
-    wire_navigation(window, Rc::clone(&state));
+    wire_navigation(
+        window,
+        Rc::clone(&state),
+        player.clone(),
+        Arc::clone(&database),
+        Rc::clone(&player_active),
+    );
+    wire_mpv_video_layer(
+        window,
+        command_rx,
+        event_tx,
+        Rc::clone(&player_active),
+    );
+    wire_player(
+        window,
+        Arc::clone(&database),
+        player,
+        event_rx,
+        player_active,
+    );
     wire_help(window);
     wire_library_refresh(window, state, database);
 }
