@@ -249,20 +249,29 @@ On **every** library tree rebuild (startup scan and each debounced rescan from `
    WHERE path NOT IN (...paths from current tree...);
    ```
 
-   This runs after each rebuild so removed, moved, or renamed files do not leave orphan favorites or resume positions. Renames are treated as delete + new file (old path pruned; new path starts with default state unless explicitly migrated later).
+   Removed, moved, or renamed files must not leave orphan favorites or resume positions. Renames are treated as delete + new file (old path pruned; new path gets a fresh row in step 4).
 
-4. **Load / upsert** — read `media_state` for paths still in the tree when needed by the UI or player; write on favorite toggle, watch progress, etc.
+4. **Seed missing `media_state` rows** — for every path in the current tree that has **no** row yet, insert a default record:
 
-`settings` is **not** pruned by tree rebuild (app-level, not per-file).
+   ```sql
+   INSERT INTO media_state (path, favorite, resume_position_ms, last_watched_at)
+   VALUES (?, 0, NULL, NULL);
+   ```
+
+   Run for each `FileNode.path` not already present (batch `INSERT` or `INSERT OR IGNORE` after path collection). New files discovered on rescan therefore always have a `media_state` row before the UI or player needs one.
+
+5. **Read / update on use** — load row by path for display (favorite icon, resume) and on user or player events (`save` on favorite toggle, periodic resume writes, etc.). Rebuild reconciliation only prunes and seeds; it does not overwrite existing `favorite`, `resume_position_ms`, or `last_watched_at` for paths that remain in the tree.
+
+`settings` is **not** pruned or seeded by tree rebuild (app-level, not per-file).
 
 ### Integration point
 
-Hook step 3 into the same pipeline as `BrowsingState::reload_tree` — immediately after a successful `build_volume_library` on the background thread (before or when applying the new tree to UI state), so DB and in-memory tree stay aligned.
+Hook steps 3–4 into the same pipeline as `BrowsingState::reload_tree` — immediately after a successful `build_volume_library` on the background thread (before or when applying the new tree to UI state), so DB rows match the current file set: **no orphans, no gaps**.
 
 ### Not in scope yet
 
 - Incremental diff scan (full tree walk for path set is enough initially).
-- Migrating `media_state` across renames.
+- Migrating `media_state` across renames (old row deleted, new row seeded with defaults).
 - Caching the full library in SQL (Phase 7).
 
 ---
@@ -271,7 +280,7 @@ Hook step 3 into the same pipeline as `BrowsingState::reload_tree` — immediate
 
 ## 7.1 Role
 
-The in-memory `FolderNode` tree built by `app/browser/` is the library index. SQLite (`media_state`) holds **user overlay** only, reconciled on each rebuild (see Phase 6.4).
+The in-memory `FolderNode` tree built by `app/browser/` is the library index. SQLite (`media_state`) holds **user overlay** only, reconciled on each rebuild: prune rows for missing files, seed rows for new files (Phase 6.4).
 
 ## 7.2 Path normalization
 

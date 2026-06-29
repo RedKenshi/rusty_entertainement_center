@@ -4,8 +4,7 @@ use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
 
-use crate::debug;
-use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Result, Watcher};
+use notify::{Event, RecommendedWatcher, RecursiveMode, Result, Watcher};
 
 /// Watch `root` recursively. Returns a channel that receives a unit value on each change batch.
 pub fn watch_workspace(root: &str) -> mpsc::Receiver<()> {
@@ -13,17 +12,13 @@ pub fn watch_workspace(root: &str) -> mpsc::Receiver<()> {
     let root = root.to_string();
 
     thread::spawn(move || {
-        debug::watch(format!("starting watcher on {root}"));
         let mut watcher: RecommendedWatcher =
             notify::recommended_watcher(move |result: Result<Event>| {
                 match result {
-                    Ok(event) => {
-                        debug::watch(format_event(&event));
+                    Ok(_event) => {
                         let _ = tx.send(());
                     }
-                    Err(error) => {
-                        debug::watch(format!("notify error: {error}"));
-                    }
+                    Err(_error) => {}
                 }
             })
             .expect("failed to create filesystem watcher");
@@ -31,7 +26,6 @@ pub fn watch_workspace(root: &str) -> mpsc::Receiver<()> {
         watcher
             .watch(Path::new(&root), RecursiveMode::Recursive)
             .expect("failed to watch workspace");
-        debug::watch(format!("watching {root} recursively"));
 
         loop {
             thread::park();
@@ -39,27 +33,6 @@ pub fn watch_workspace(root: &str) -> mpsc::Receiver<()> {
     });
 
     rx
-}
-
-fn format_event(event: &Event) -> String {
-    let paths = event
-        .paths
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("{} [{paths}]", format_event_kind(&event.kind))
-}
-
-fn format_event_kind(kind: &EventKind) -> &'static str {
-    match kind {
-        EventKind::Access(_) => "access",
-        EventKind::Create(_) => "create",
-        EventKind::Modify(_) => "modify",
-        EventKind::Remove(_) => "remove",
-        EventKind::Other => "other",
-        EventKind::Any => "any",
-    }
 }
 
 #[cfg(test)]

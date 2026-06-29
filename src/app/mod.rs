@@ -15,11 +15,13 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use slint::{ComponentHandle, Global, ModelRc, Timer, TimerMode, VecModel};
 
+use crate::db::{self, Database};
 use crate::debug;
 use crate::icons;
 use crate::structs::FolderNode;
@@ -127,7 +129,17 @@ fn wire_help(window: &MainWindow) {
     });
 }
 
-fn wire_library_refresh(window: &MainWindow, browsing_state: Rc<RefCell<BrowsingState>>) {
+fn reconcile_tree(database: &Database, tree: &FolderNode) {
+    if let Err(err) = database.block_on(db::reconcile::sync_tree(database.pool(), tree)) {
+        debug::db(format!("sync_tree failed: {err}"));
+    }
+}
+
+fn wire_library_refresh(
+    window: &MainWindow,
+    browsing_state: Rc<RefCell<BrowsingState>>,
+    database: Arc<Database>,
+) {
     const QUIET_PERIOD: Duration = Duration::from_millis(800);
 
     debug::refresh(format!("workspace={WORKSPACE} debounce={QUIET_PERIOD:?}"));
@@ -182,15 +194,10 @@ fn wire_library_refresh(window: &MainWindow, browsing_state: Rc<RefCell<Browsing
             rescan_pending_logged = false;
         }
 
-        let mut batch = 0usize;
         while change_events.try_recv().is_ok() {
-            batch += 1;
             dirty = true;
             last_change = Some(Instant::now());
             rescan_pending_logged = false;
-        }
-        if batch > 0 {
-            debug::refresh(format!("received {batch} fs event batch(es), debouncing"));
         }
 
         if !dirty || rescanning.load(Ordering::Acquire) {
@@ -216,11 +223,16 @@ fn wire_library_refresh(window: &MainWindow, browsing_state: Rc<RefCell<Browsing
         rescanning.store(true, Ordering::Release);
 
         let tree_tx = tree_tx.clone();
+        let database = Arc::clone(&database);
         thread::spawn(move || {
             let started = Instant::now();
             debug::refresh("background rescan thread started");
-            let result = catch_unwind(AssertUnwindSafe(|| build_volume_library(WORKSPACE)))
-                .map_err(|_| ());
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                let tree = build_volume_library(WORKSPACE);
+                reconcile_tree(&database, &tree);
+                tree
+            }))
+            .map_err(|_| ());
             match &result {
                 Ok(tree) => debug::refresh(format!(
                     "background rescan finished in {:?}: {} volumes, {} files",
@@ -241,11 +253,15 @@ fn wire_library_refresh(window: &MainWindow, browsing_state: Rc<RefCell<Browsing
 }
 
 /// Register all UI callbacks and perform the initial window sync.
-pub fn wire_up(window: &MainWindow, state: Rc<RefCell<BrowsingState>>) {
+pub fn wire_up(
+    window: &MainWindow,
+    state: Rc<RefCell<BrowsingState>>,
+    database: Arc<Database>,
+) {
     wire_icons(window);
     sync_window(window, &state.borrow());
     wire_theme(window);
     wire_navigation(window, Rc::clone(&state));
     wire_help(window);
-    wire_library_refresh(window, state);
+    wire_library_refresh(window, state, database);
 }

@@ -4,6 +4,7 @@ use crate::ui::{Colors, MainWindow};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub name: &'static str,
     pub shades: PaletteShades,
 }
