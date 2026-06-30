@@ -1,5 +1,6 @@
 #![allow(dead_code)] // favorite toggle lands in a later UI pass
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -31,6 +32,22 @@ pub struct SqliteMediaRepository {
 impl SqliteMediaRepository {
     pub fn new(pool: Pool<Sqlite>) -> Self {
         Self { pool }
+    }
+
+    pub async fn list_resume_positions(&self) -> Result<HashMap<PathBuf, u64>> {
+        let rows = sqlx::query_as::<_, ResumeRow>(
+            "SELECT path, resume_position_ms FROM media_state WHERE resume_position_ms IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let ms = row.resume_position_ms? as u64;
+                (ms > 0).then_some((PathBuf::from(row.path), ms))
+            })
+            .collect())
     }
 }
 
@@ -87,6 +104,12 @@ impl MediaStateRepository for SqliteMediaRepository {
 
         Ok(())
     }
+}
+
+#[derive(sqlx::FromRow)]
+struct ResumeRow {
+    path: String,
+    resume_position_ms: Option<i64>,
 }
 
 #[derive(sqlx::FromRow)]

@@ -12,7 +12,8 @@ pub use self::browser::{build_volume_library, WORKSPACE};
 pub use self::browsing::{ActivateResult, BrowsingState};
 
 use std::cell::RefCell;
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -22,7 +23,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use slint::{ComponentHandle, Global, ModelRc, Timer, TimerMode, VecModel};
 
-use crate::db::{self, Database, MediaState, MediaStateRepository};
+use crate::db::{self, normalize_path, Database, MediaState, MediaStateRepository};
 use crate::debug;
 use crate::icons;
 use self::player::{PlaybackState, PlaybackStatus, PlayerEvent, PlayerHandle, wire_mpv_video_layer};
@@ -38,6 +39,61 @@ fn sync_window(window: &MainWindow, state: &BrowsingState) {
         state.visible_items().to_vec(),
     )));
     window.set_selected_index(state.selected as i32);
+}
+
+fn load_resume_cache(database: &Database) -> HashMap<PathBuf, u64> {
+    database
+        .block_on(async { database.media().list_resume_positions().await })
+        .unwrap_or_default()
+}
+
+fn apply_resume_cache(state: &Rc<RefCell<BrowsingState>>, cache: &HashMap<PathBuf, u64>) {
+    state.borrow_mut().set_resume_positions(cache.clone());
+}
+
+fn resume_cache_key(path: &Path) -> PathBuf {
+    PathBuf::from(normalize_path(path))
+}
+
+fn update_resume_cache_entry(
+    cache: &Rc<RefCell<HashMap<PathBuf, u64>>>,
+    path: &Path,
+    position_ms: u64,
+    duration_ms: Option<u64>,
+) {
+    let key = resume_cache_key(path);
+    let mut cache = cache.borrow_mut();
+    match resume_position_to_store(position_ms, duration_ms) {
+        Some(ms) => {
+            cache.insert(key, ms);
+        }
+        None => {
+            cache.remove(&key);
+        }
+    }
+}
+
+fn clear_resume_in_db(database: &Database, path: &Path) {
+    let path = path.to_path_buf();
+    let pool = database.pool().clone();
+    database.spawn(async move {
+        let media = db::SqliteMediaRepository::new(pool);
+        let mut state = media
+            .get(&path)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(MediaState {
+                path: path.clone(),
+                favorite: false,
+                resume_position_ms: None,
+                last_watched_at: None,
+            });
+        state.resume_position_ms = None;
+        if let Err(err) = media.save(&state).await {
+            debug::db(format!("resume clear failed: {err}"));
+        }
+    });
 }
 
 /// Run a browsing mutation, then refresh the window from the updated state.
@@ -208,7 +264,11 @@ fn persist_resume(
     path: &Path,
     position_ms: u64,
     duration_ms: Option<u64>,
+    resume_cache: Option<&Rc<RefCell<HashMap<PathBuf, u64>>>>,
 ) {
+    if let Some(cache) = resume_cache {
+        update_resume_cache_entry(cache, path, position_ms, duration_ms);
+    }
     let path = path.to_path_buf();
     let pool = database.pool().clone();
     let resume_position_ms = resume_position_to_store(position_ms, duration_ms);
@@ -239,8 +299,9 @@ fn wire_player(
     player: PlayerHandle,
     event_rx: mpsc::Receiver<PlayerEvent>,
     player_active: Rc<RefCell<bool>>,
+    browsing_state: Rc<RefCell<BrowsingState>>,
+    resume_cache: Rc<RefCell<HashMap<PathBuf, u64>>>,
 ) {
-    const SEEK_MS: i64 = 1_000;
     const RESUME_SAVE_INTERVAL: Duration = Duration::from_secs(15);
 
     let last_state = Rc::new(RefCell::new(PlaybackState::default()));
@@ -251,13 +312,23 @@ fn wire_player(
     });
 
     let player_seek = player.clone();
-    window.on_playback_seek_backward(move || {
-        player_seek.seek_delta(-SEEK_MS);
+    window.on_playback_seek_backward(move |seek_ms| {
+        player_seek.seek_delta(-(seek_ms as i64));
     });
 
     let player_seek = player.clone();
-    window.on_playback_seek_forward(move || {
-        player_seek.seek_delta(SEEK_MS);
+    window.on_playback_seek_forward(move |seek_ms| {
+        player_seek.seek_delta(seek_ms as i64);
+    });
+
+    let player_cycle_audio = player.clone();
+    window.on_playback_cycle_audio(move || {
+        player_cycle_audio.cycle_audio_track();
+    });
+
+    let player_cycle_subtitle = player.clone();
+    window.on_playback_cycle_subtitle(move || {
+        player_cycle_subtitle.cycle_subtitle_track();
     });
 
     let window_weak_stop = window.as_weak();
@@ -265,6 +336,8 @@ fn wire_player(
     let database_stop = Arc::clone(&database);
     let player_active_stop = Rc::clone(&player_active);
     let last_state_stop = Rc::clone(&last_state);
+    let resume_cache_stop = Rc::clone(&resume_cache);
+    let browsing_stop = Rc::clone(&browsing_state);
     window.on_playback_stop(move || {
         let Some(window) = window_weak_stop.upgrade() else {
             return;
@@ -276,15 +349,20 @@ fn wire_player(
                 path,
                 snapshot.position_ms,
                 snapshot.duration_ms,
+                Some(&resume_cache_stop),
             );
         }
         player_stop.stop();
         exit_player_mode(&window, &player_active_stop);
+        apply_resume_cache(&browsing_stop, &resume_cache_stop.borrow());
+        sync_window(&window, &browsing_stop.borrow());
     });
 
     let window_weak = window.as_weak();
     let database_timer = Arc::clone(&database);
     let player_active_timer = Rc::clone(&player_active);
+    let resume_cache_timer = Rc::clone(&resume_cache);
+    let browsing_timer = Rc::clone(&browsing_state);
     let mut last_status = PlaybackStatus::Stopped;
     let mut last_resume_save = Instant::now();
 
@@ -311,6 +389,7 @@ fn wire_player(
                                     path,
                                     state.position_ms,
                                     state.duration_ms,
+                                    Some(&resume_cache_timer),
                                 );
                             }
                         }
@@ -326,9 +405,12 @@ fn wire_player(
                             path,
                             snapshot.position_ms,
                             snapshot.duration_ms,
+                            Some(&resume_cache_timer),
                         );
                     }
                     exit_player_mode(&window, &player_active_timer);
+                    apply_resume_cache(&browsing_timer, &resume_cache_timer.borrow());
+                    sync_window(&window, &browsing_timer.borrow());
                     *last_state_timer.borrow_mut() = PlaybackState::default();
                     last_status = PlaybackStatus::Stopped;
                 }
@@ -351,9 +433,112 @@ fn wire_player(
                     path,
                     snapshot.position_ms,
                     snapshot.duration_ms,
+                    Some(&resume_cache_timer),
                 );
             }
             last_resume_save = Instant::now();
+        }
+    });
+}
+
+fn wire_resume_clear(
+    window: &MainWindow,
+    browsing_state: Rc<RefCell<BrowsingState>>,
+    database: Arc<Database>,
+    resume_cache: Rc<RefCell<HashMap<PathBuf, u64>>>,
+    player_active: Rc<RefCell<bool>>,
+) {
+    const HOLD_DURATION: Duration = Duration::from_secs(3);
+
+    let hold_generation = Rc::new(RefCell::new(0u64));
+    let hold_timer = Rc::new(RefCell::new(None::<Timer>));
+    let hold_active = Rc::new(RefCell::new(false));
+
+    let window_weak = window.as_weak();
+    let state = Rc::clone(&browsing_state);
+    let database_start = Arc::clone(&database);
+    let resume_cache_start = Rc::clone(&resume_cache);
+    let player_active_start = Rc::clone(&player_active);
+    let hold_generation_start = Rc::clone(&hold_generation);
+    let hold_timer_start = Rc::clone(&hold_timer);
+    let hold_active_start = Rc::clone(&hold_active);
+    window.on_resume_clear_hold_started(move || {
+        if *player_active_start.borrow() {
+            debug::browse("resume clear hold: ignored (player active)");
+            return;
+        }
+
+        if *hold_active_start.borrow() {
+            debug::browse("resume clear hold: ignored (key repeat)");
+            return;
+        }
+
+        let path = {
+            let browsing = state.borrow();
+            let Some(path) = browsing.selected_file_path() else {
+                debug::browse("resume clear hold: ignored (not a file selection)");
+                return;
+            };
+            if !browsing.selected_file_has_resume() {
+                debug::browse(format!(
+                    "resume clear hold: ignored (no resume for {})",
+                    path.display()
+                ));
+                return;
+            }
+            path
+        };
+
+        *hold_active_start.borrow_mut() = true;
+        *hold_generation_start.borrow_mut() += 1;
+        let generation = *hold_generation_start.borrow();
+        hold_timer_start.borrow_mut().take();
+
+        debug::browse(format!(
+            "resume clear hold: started for {} ({HOLD_DURATION:?})",
+            path.display()
+        ));
+
+        let window_weak = window_weak.clone();
+        let state = Rc::clone(&state);
+        let database = Arc::clone(&database_start);
+        let resume_cache = Rc::clone(&resume_cache_start);
+        let hold_generation = Rc::clone(&hold_generation_start);
+        let hold_active = Rc::clone(&hold_active_start);
+        let cache_key = resume_cache_key(&path);
+        let timer = Timer::default();
+        timer.start(TimerMode::SingleShot, HOLD_DURATION, move || {
+            if generation != *hold_generation.borrow() {
+                debug::browse("resume clear hold: timer fired but generation mismatch");
+                return;
+            }
+
+            *hold_active.borrow_mut() = false;
+
+            let Some(window) = window_weak.upgrade() else {
+                debug::browse("resume clear hold: timer fired but window gone");
+                return;
+            };
+
+            resume_cache.borrow_mut().remove(&cache_key);
+            clear_resume_in_db(&database, &path);
+            apply_resume_cache(&state, &resume_cache.borrow());
+            sync_window(&window, &state.borrow());
+            debug::browse(format!("resume clear hold: cleared {}", path.display()));
+        });
+        *hold_timer_start.borrow_mut() = Some(timer);
+    });
+
+    let hold_generation_end = Rc::clone(&hold_generation);
+    let hold_timer_end = Rc::clone(&hold_timer);
+    let hold_active_end = Rc::clone(&hold_active);
+    window.on_resume_clear_hold_ended(move || {
+        let was_active = *hold_active_end.borrow();
+        *hold_active_end.borrow_mut() = false;
+        *hold_generation_end.borrow_mut() += 1;
+        hold_timer_end.borrow_mut().take();
+        if was_active {
+            debug::browse("resume clear hold: released before timeout");
         }
     });
 }
@@ -502,8 +687,10 @@ pub fn wire_up(
 ) {
     let (player, command_rx, event_tx, event_rx) = PlayerHandle::spawn();
     let player_active = Rc::new(RefCell::new(false));
+    let resume_cache = Rc::new(RefCell::new(load_resume_cache(&database)));
 
     wire_icons(window);
+    apply_resume_cache(&state, &resume_cache.borrow());
     sync_window(window, &state.borrow());
     wire_theme(window);
     wire_navigation(
@@ -524,7 +711,16 @@ pub fn wire_up(
         Arc::clone(&database),
         player,
         event_rx,
-        player_active,
+        Rc::clone(&player_active),
+        Rc::clone(&state),
+        Rc::clone(&resume_cache),
+    );
+    wire_resume_clear(
+        window,
+        Rc::clone(&state),
+        Arc::clone(&database),
+        Rc::clone(&resume_cache),
+        Rc::clone(&player_active),
     );
     wire_help(window);
     wire_library_refresh(window, state, database);

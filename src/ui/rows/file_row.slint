@@ -8,6 +8,7 @@ export component FileRow inherits Rectangle {
     in property <string> bitrate;
     in property <string> size;
     in property <string> duration;
+    in property <string> resume;
     in property <bool> selected;
 
     horizontal-stretch: 1;
@@ -33,6 +34,14 @@ export component FileRow inherits Rectangle {
             horizontal-alignment: left;
             color: selected ? Colors.primary-70 : Colors.primary-70;
         }
+
+        if resume != "" : Text {
+            text: resume;
+            font-size: 10px;
+            horizontal-alignment: left;
+            color: selected ? Colors.primary-30 : Colors.primary-20;
+        }
+
         Rectangle {
             horizontal-stretch: 1;
         }

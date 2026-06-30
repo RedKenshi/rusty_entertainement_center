@@ -20,6 +20,9 @@ pub fn volume_to_tree_item(volume: &FolderNode, expanded: bool, selected: bool) 
         filesSize: format_file_size(Some(volume.reduced_size_of_files)).into(),
         filesDuration: format_duration(Some(volume.reduced_duration_of_files)).into(),
         nbFiles: volume.reduced_number_of_file as i32,
+        audioTracks: String::new().into(),
+        subtitleTracks: String::new().into(),
+        resumePosition: String::new().into(),
     }
 }
 
@@ -45,6 +48,9 @@ pub fn folder_to_tree_item(
         filesSize: format_file_size(Some(folder.reduced_size_of_files)).into(),
         filesDuration: format_duration(Some(folder.reduced_duration_of_files)).into(),
         nbFiles: folder.reduced_number_of_file as i32,
+        audioTracks: String::new().into(),
+        subtitleTracks: String::new().into(),
+        resumePosition: String::new().into(),
     }
 }
 
@@ -75,6 +81,17 @@ pub fn file_to_tree_item(file: &FileNode, indent: i32, selected: bool) -> TreeIt
         filesDuration: format_duration(metadata.and_then(|metadata| metadata.duration_ms))
         .into(),
         nbFiles: 0,
+        audioTracks: format_track_count(
+            metadata.and_then(|metadata| metadata.audio_track_count),
+            "audio",
+        )
+        .into(),
+        subtitleTracks: format_track_count(
+            metadata.and_then(|metadata| metadata.subtitle_track_count),
+            "subtitle",
+        )
+        .into(),
+        resumePosition: String::new().into(),
     }
 }
 
@@ -180,6 +197,14 @@ pub fn format_resolution(width: Option<u32>, height: Option<u32>) -> String {
     }
 }
 
+pub fn format_track_count(count: Option<u32>, label: &str) -> String {
+    match count {
+        Some(1) => format!("1 {label}"),
+        Some(n) => format!("{n} {label}s"),
+        None => "—".to_string(),
+    }
+}
+
 pub fn format_file_size(octets: Option<u64>) -> String {
     let octets = octets.unwrap_or(0);
 
@@ -266,6 +291,8 @@ mod tests {
                 codec: Some("HEVC".to_string()),
                 width: None,
                 height: None,
+                audio_track_count: None,
+                subtitle_track_count: None,
             }),
         }
     }

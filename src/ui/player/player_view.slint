@@ -22,7 +22,12 @@ export component PlayerView inherits VerticalLayout {
         border-width: 2px;
         border-radius: BorderRadius.m;
         width: parent.width - 2 * Spacing.l;
-        background: Colors.primary-5;
+        background: rgba(
+            Colors.primary-5.red,
+            Colors.primary-5.green,
+            Colors.primary-5.blue,
+            0.8
+        );
 
         VerticalLayout {
             spacing: Spacing.m;

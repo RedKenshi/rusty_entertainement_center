@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::db::normalize_path;
 use crate::debug;
 use crate::structs::FolderNode;
 use crate::ui::TreeItem;
-use crate::utils::flatten_along_path;
+use crate::utils::{flatten_along_path, format_playback_time, resume_position_to_store};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActivateResult {
@@ -17,6 +19,7 @@ pub struct BrowsingState {
     pub stack: Vec<PathBuf>,
     pub selected: usize,
     visible: Vec<TreeItem>,
+    resume_positions: HashMap<PathBuf, u64>,
 }
 
 impl BrowsingState {
@@ -26,6 +29,7 @@ impl BrowsingState {
             stack: Vec::new(),
             selected: 0,
             visible: Vec::new(),
+            resume_positions: HashMap::new(),
         };
         state.rebuild_visible();
         state
@@ -134,6 +138,24 @@ impl BrowsingState {
             .and_then(|metadata| metadata.duration_ms)
     }
 
+    pub fn set_resume_positions(&mut self, positions: HashMap<PathBuf, u64>) {
+        self.resume_positions = positions;
+        self.apply_resume_to_visible();
+    }
+
+    pub fn selected_file_path(&self) -> Option<PathBuf> {
+        let item = self.visible.get(self.selected)?;
+        if item.is_folder || item.is_volume {
+            return None;
+        }
+        Some(PathBuf::from(item.path.as_str()))
+    }
+
+    pub fn selected_file_has_resume(&self) -> bool {
+        self.selected_file_path()
+            .is_some_and(|path| resume_position_for(&self.resume_positions, &path).is_some())
+    }
+
     fn selected_folder_path(&self) -> Option<PathBuf> {
         let item = self.visible.get(self.selected)?;
         if !item.is_folder && !item.is_volume {
@@ -148,6 +170,31 @@ impl BrowsingState {
         self.visible = items;
         self.selected = self.selected.min(self.visible.len().saturating_sub(1));
         self.apply_selection();
+        self.apply_resume_to_visible();
+    }
+
+    fn apply_resume_to_visible(&mut self) {
+        let labels: Vec<(usize, slint::SharedString)> = self
+            .visible
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| {
+                if item.is_folder || item.is_volume {
+                    return Some((index, "".into()));
+                }
+                let path = PathBuf::from(item.path.as_str());
+                let duration_ms = self.file_duration_ms(&path);
+                let label = resume_position_for(&self.resume_positions, &path)
+                    .and_then(|position_ms| resume_position_to_store(position_ms, duration_ms))
+                    .map(format_playback_time)
+                    .unwrap_or_default();
+                Some((index, label.into()))
+            })
+            .collect();
+
+        for (index, label) in labels {
+            self.visible[index].resumePosition = label;
+        }
     }
 
     fn apply_selection(&mut self) {
@@ -165,6 +212,14 @@ impl BrowsingState {
             .unwrap_or(0);
         self.apply_selection();
     }
+}
+
+fn resume_position_for(positions: &HashMap<PathBuf, u64>, path: &Path) -> Option<u64> {
+    let normalized = PathBuf::from(normalize_path(path));
+    positions
+        .get(&normalized)
+        .or_else(|| positions.get(path))
+        .copied()
 }
 
 fn find_file<'a>(tree: &'a FolderNode, path: &Path) -> Option<&'a crate::structs::FileNode> {
@@ -393,6 +448,8 @@ mod tests {
                     codec: None,
                     width: None,
                     height: None,
+                    audio_track_count: None,
+                    subtitle_track_count: None,
                 }),
             }],
             reduced_number_of_file: 1,

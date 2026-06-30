@@ -15,6 +15,8 @@ pub struct VideoProbe {
     pub codec: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    pub audio_track_count: Option<u32>,
+    pub subtitle_track_count: Option<u32>,
 }
 
 fn ffprobe_available() -> bool {
@@ -63,7 +65,53 @@ pub fn probe_video(path: &Path) -> VideoProbe {
         return VideoProbe::default();
     }
 
-    parse_ffprobe_output(&String::from_utf8_lossy(&output.stdout))
+    let mut probe = parse_ffprobe_output(&String::from_utf8_lossy(&output.stdout));
+    let (audio_count, subtitle_count) = probe_stream_type_counts(path_str);
+    probe.audio_track_count = audio_count;
+    probe.subtitle_track_count = subtitle_count;
+    probe
+}
+
+fn probe_stream_type_counts(path_str: &str) -> (Option<u32>, Option<u32>) {
+    let output = match Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=codec_type",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            path_str,
+        ])
+        .output()
+    {
+        Ok(output) => output,
+        Err(_) => return (None, None),
+    };
+
+    if !output.status.success() {
+        return (None, None);
+    }
+
+    parse_stream_type_counts(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_stream_type_counts(output: &str) -> (Option<u32>, Option<u32>) {
+    let mut audio = 0u32;
+    let mut subtitle = 0u32;
+
+    for line in output.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        match line {
+            "audio" => audio += 1,
+            "subtitle" => subtitle += 1,
+            _ => {}
+        }
+    }
+
+    (
+        (audio > 0).then_some(audio),
+        (subtitle > 0).then_some(subtitle),
+    )
 }
 
 fn parse_ffprobe_output(output: &str) -> VideoProbe {
@@ -150,6 +198,8 @@ mod tests {
                 codec: Some("HEVC".to_string()),
                 width: Some(3840),
                 height: Some(2160),
+                audio_track_count: None,
+                subtitle_track_count: None,
             }
         );
     }
@@ -166,6 +216,8 @@ mod tests {
                 codec: Some("H264".to_string()),
                 width: None,
                 height: None,
+                audio_track_count: None,
+                subtitle_track_count: None,
             }
         );
     }
@@ -177,5 +229,18 @@ mod tests {
         );
 
         assert_eq!(probe, VideoProbe::default());
+    }
+
+    #[test]
+    fn parse_stream_type_counts_reads_audio_and_subtitle_lines() {
+        assert_eq!(
+            parse_stream_type_counts("video\naudio\naudio\nsubtitle\n"),
+            (Some(2), Some(1))
+        );
+    }
+
+    #[test]
+    fn parse_stream_type_counts_returns_none_when_no_matching_streams() {
+        assert_eq!(parse_stream_type_counts("video\ndata\n"), (None, None));
     }
 }

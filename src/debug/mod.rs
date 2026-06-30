@@ -15,3 +15,9 @@ pub fn player(message: impl std::fmt::Display) {
     #[cfg(debug_assertions)]
     eprintln!("[player] {message}");
 }
+
+/// Browsing UI interactions (selection, resume clear hold, …).
+pub fn browse(message: impl std::fmt::Display) {
+    #[cfg(debug_assertions)]
+    eprintln!("[browse] {message}");
+}

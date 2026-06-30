@@ -30,4 +30,6 @@ pub struct FileMetadata {
     pub codec: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    pub audio_track_count: Option<u32>,
+    pub subtitle_track_count: Option<u32>,
 }

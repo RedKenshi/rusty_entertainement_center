@@ -73,6 +73,14 @@ impl PlayerHandle {
     pub fn seek_delta(&self, delta_ms: i64) {
         let _ = self.command_tx.send(PlayerCommand::SeekDelta(delta_ms));
     }
+
+    pub fn cycle_audio_track(&self) {
+        let _ = self.command_tx.send(PlayerCommand::CycleAudioTrack);
+    }
+
+    pub fn cycle_subtitle_track(&self) {
+        let _ = self.command_tx.send(PlayerCommand::CycleSubtitleTrack);
+    }
 }
 
 pub use mpv_gl::wire_mpv_video_layer;

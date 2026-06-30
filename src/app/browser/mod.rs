@@ -137,6 +137,8 @@ pub fn build_tree(root: &str) -> FolderNode {
                 codec: probe.codec,
                 width: probe.width,
                 height: probe.height,
+                audio_track_count: probe.audio_track_count,
+                subtitle_track_count: probe.subtitle_track_count,
             }),
         };
 
@@ -236,6 +238,8 @@ mod tests {
                 codec: None,
                 width: None,
                 height: None,
+                audio_track_count: None,
+                subtitle_track_count: None,
             }),
         }
     }

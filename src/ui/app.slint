@@ -16,8 +16,8 @@ import { PlayerView } from "player/player_view.slint";
 export { TreeItem, IconLoader, Colors }
 
 export component MainWindow inherits Window {
-    width: 560px;
-    height: 320px;
+    width: 720px;
+    height: 400px;
     background: root.player_active ? #000000 : Colors.primary-5;
     default-font-family: "Pixelify Sans";
     default-font-size: 15px;
@@ -29,10 +29,15 @@ export component MainWindow inherits Window {
     callback cycle_theme();
     callback toggle_help();
 
+    callback resume_clear_hold_started();
+    callback resume_clear_hold_ended();
+
     callback playback_toggle_pause();
-    callback playback_seek_backward();
-    callback playback_seek_forward();
+    callback playback_seek_backward(seek-ms: int);
+    callback playback_seek_forward(seek-ms: int);
     callback playback_stop();
+    callback playback_cycle_audio();
+    callback playback_cycle_subtitle();
 
     in-out property <bool> help_visible: false;
     in-out property <bool> player_active: false;
@@ -64,6 +69,7 @@ export component MainWindow inherits Window {
     }
 
     private property <length> viewport-height: root.height - 34px;
+    private property <bool> resume-clear-hold-armed: false;
 
     private property <TreeItem> selected-item: root.tree.length > 0
         ? root.tree[clamp(root.selected_index, 0, root.tree.length - 1)]
@@ -83,6 +89,9 @@ export component MainWindow inherits Window {
             nbFiles: 0,
             filesSize: "",
             filesDuration: "",
+            audioTracks: "",
+            subtitleTracks: "",
+            resumePosition: "",
         };
 
     function update-scroll-to-selection() {
@@ -125,6 +134,26 @@ export component MainWindow inherits Window {
         focus-on-click: true;
         focus-on-tab-navigation: true;
 
+        key-pressed(event) => {
+            if (!root.player_active
+                && !root.resume-clear-hold-armed
+                && (event.text == "r" || event.text == "R")) {
+                root.resume-clear-hold-armed = true;
+                root.resume_clear_hold_started();
+                return accept;
+            }
+            reject
+        }
+
+        key-released(event) => {
+            if (event.text == "r" || event.text == "R") {
+                root.resume-clear-hold-armed = false;
+                root.resume_clear_hold_ended();
+                return accept;
+            }
+            reject
+        }
+
         KeyBinding {
             keys: @keys(Space);
             activated => {
@@ -137,20 +166,34 @@ export component MainWindow inherits Window {
             keys: @keys(LeftArrow);
             activated => {
                 if root.player_active {
-                    root.playback_seek_backward();
+                    root.playback_seek_backward(10000);
                 } else {
                     root.navigate_back();
                 }
             }
         }
         KeyBinding {
+            keys: @keys(Control + LeftArrow);
+            enabled: root.player_active;
+            activated => {
+                root.playback_seek_backward(300000);
+            }
+        }
+        KeyBinding {
             keys: @keys(RightArrow);
             activated => {
                 if root.player_active {
-                    root.playback_seek_forward();
+                    root.playback_seek_forward(10000);
                 } else {
                     root.open_selected();
                 }
+            }
+        }
+        KeyBinding {
+            keys: @keys(Control + RightArrow);
+            enabled: root.player_active;
+            activated => {
+                root.playback_seek_forward(300000);
             }
         }
         KeyBinding {
@@ -200,6 +243,22 @@ export component MainWindow inherits Window {
             activated => {
                 if !root.player_active {
                     root.toggle_help();
+                }
+            }
+        }
+        KeyBinding {
+            keys: @keys(L);
+            activated => {
+                if root.player_active {
+                    root.playback_cycle_audio();
+                }
+            }
+        }
+        KeyBinding {
+            keys: @keys(K);
+            activated => {
+                if root.player_active {
+                    root.playback_cycle_subtitle();
                 }
             }
         }
@@ -311,6 +370,8 @@ export component MainWindow inherits Window {
                         format: root.selected-item.format;
                         codec: root.selected-item.codec;
                         resolution: root.selected-item.resolution;
+                        audio_tracks: root.selected-item.audioTracks;
+                        subtitle_tracks: root.selected-item.subtitleTracks;
 
                         name: root.selected-item.name;
                         size: root.selected-item.size;
