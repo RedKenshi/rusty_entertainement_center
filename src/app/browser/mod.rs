@@ -11,6 +11,7 @@ use std::path::Path;
 use walkdir::WalkDir;
 
 use super::probe::probe_video;
+use super::volumes;
 use crate::structs::{FileMetadata, FileNode, FolderNode};
 
 /// File extensions treated as playable video files. Everything else is ignored.
@@ -178,38 +179,24 @@ pub fn build_tree(root: &str) -> FolderNode {
 
 /// Builds the top-level library tree for the app.
 ///
-/// Scans `workspace` for directories whose names start with `volume` (e.g. `volumeD`, `volumeE`,
-/// `volumeF`), runs `build_tree` on each one, and returns a hidden root node whose `subfolders`
-/// are those volumes. The root itself is never shown in the UI.
+/// Discovers storage volumes (real mounts, or fake `volume*` folders when `FAKE_VOLUMES` is set),
+/// runs `build_tree` on each one, and returns a hidden root node whose `subfolders` are those
+/// volumes. The root itself is never shown in the UI.
 pub fn build_volume_library(workspace: &str) -> FolderNode {
     let workspace_path = Path::new(workspace);
-    let mut volumes = Vec::new();
+    let mut volume_nodes = Vec::new();
 
-    let entries = std::fs::read_dir(workspace).unwrap_or_else(|_| {
-        panic!("failed to read workspace directory: {workspace}")
-    });
-
-    for entry in entries.filter_map(Result::ok) {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-
-        let name = entry.file_name().to_string_lossy().to_string();
-        if !name.starts_with("volume") {
-            continue;
-        }
-
-        let volume_root = path.to_str().expect("volume path must be valid UTF-8");
-        volumes.push((name, build_tree(volume_root)));
+    for volume in volumes::list_volume_roots(workspace) {
+        let volume_root = volume.path.to_str().expect("volume path must be valid UTF-8");
+        let mut node = build_tree(volume_root);
+        node.name = volume.name;
+        volume_nodes.push(node);
     }
-
-    volumes.sort_by(|(left, _), (right, _)| left.cmp(right));
 
     let mut root = FolderNode {
         path: workspace_path.to_path_buf(),
         name: String::from("root"),
-        subfolders: volumes.into_iter().map(|(_, node)| node).collect(),
+        subfolders: volume_nodes,
         files: vec![],
         reduced_number_of_file: 0,
         reduced_size_of_files: 0,

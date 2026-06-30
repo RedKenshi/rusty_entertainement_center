@@ -7,6 +7,7 @@ mod browser;
 mod browsing;
 mod player;
 mod probe;
+mod volumes;
 
 pub use self::browser::{build_volume_library, WORKSPACE};
 pub use self::browsing::{ActivateResult, BrowsingState};
@@ -569,8 +570,17 @@ fn wire_library_refresh(
 ) {
     const QUIET_PERIOD: Duration = Duration::from_millis(800);
 
-    debug::refresh(format!("workspace={WORKSPACE} debounce={QUIET_PERIOD:?}"));
-    let change_events = watch::watch_workspace(WORKSPACE);
+    let watch_roots = volumes::watch_roots(WORKSPACE);
+    debug::refresh(format!(
+        "workspace={WORKSPACE} fake_volumes={} watch_roots={} debounce={QUIET_PERIOD:?}",
+        volumes::use_fake_volumes(),
+        watch_roots
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    ));
+    let change_events = watch::watch_paths(&watch_roots);
     let (tree_tx, tree_rx) = mpsc::channel::<Result<FolderNode, ()>>();
     let window_weak = window.as_weak();
     let state = Rc::clone(&browsing_state);

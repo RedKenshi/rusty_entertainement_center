@@ -1,15 +1,15 @@
 //! Filesystem watcher: signals when the library workspace changes on disk.
 
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
 
 use notify::{Event, RecommendedWatcher, RecursiveMode, Result, Watcher};
 
-/// Watch `root` recursively. Returns a channel that receives a unit value on each change batch.
-pub fn watch_workspace(root: &str) -> mpsc::Receiver<()> {
+/// Watch each path recursively. Returns a channel that receives a unit value on each change batch.
+pub fn watch_paths(roots: &[PathBuf]) -> mpsc::Receiver<()> {
     let (tx, rx) = mpsc::channel();
-    let root = root.to_string();
+    let roots = roots.to_vec();
 
     thread::spawn(move || {
         let mut watcher: RecommendedWatcher =
@@ -23,9 +23,15 @@ pub fn watch_workspace(root: &str) -> mpsc::Receiver<()> {
             })
             .expect("failed to create filesystem watcher");
 
-        watcher
-            .watch(Path::new(&root), RecursiveMode::Recursive)
-            .expect("failed to watch workspace");
+        for root in &roots {
+            if root.is_dir() {
+                watcher
+                    .watch(root.as_path(), RecursiveMode::Recursive)
+                    .unwrap_or_else(|err| {
+                        panic!("failed to watch {}: {err}", root.display())
+                    });
+            }
+        }
 
         loop {
             thread::park();
@@ -33,6 +39,11 @@ pub fn watch_workspace(root: &str) -> mpsc::Receiver<()> {
     });
 
     rx
+}
+
+/// Watch a single root recursively (convenience for tests).
+pub fn watch_workspace(root: &str) -> mpsc::Receiver<()> {
+    watch_paths(&[PathBuf::from(root)])
 }
 
 #[cfg(test)]
@@ -45,7 +56,7 @@ mod tests {
     fn copy_folder_emits_change_events() {
         let workspace = env!("CARGO_MANIFEST_DIR");
         let events = watch_workspace(workspace);
-        let src = format!("{workspace}/volumeE/mp4");
+        let src = format!("{workspace}/volumeD/mkv");
         let dst = format!("{workspace}/volumeD/mp4-watch-test");
 
         let _ = fs::remove_dir_all(&dst);

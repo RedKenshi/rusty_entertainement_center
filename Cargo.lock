@@ -4458,6 +4458,7 @@ name = "rusty-entertainement-center"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "dotenvy",
  "glow 0.16.0",
  "i-slint-core",
  "libmpv2",

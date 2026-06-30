@@ -22,6 +22,8 @@ fn database_path() -> PathBuf {
 }
 
 fn main() -> Result<(), slint::PlatformError> {
+    let _ = dotenvy::dotenv();
+
     let dump_only = std::env::args().any(|arg| arg == "--dump-db");
 
     if dump_only {

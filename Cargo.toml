@@ -17,6 +17,7 @@ serde_json = "1.0.150"
 async-trait = "0.1.89"
 libmpv2 = { version = "6.0", default-features = false, features = ["render"] }
 glow = "0.16"
+dotenvy = "0.15"
 
 [build-dependencies]
 slint-build = "1.17.0"
