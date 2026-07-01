@@ -21,6 +21,23 @@ fn database_path() -> PathBuf {
     PathBuf::from(WORKSPACE).join("library.db")
 }
 
+fn init_slint_backend() -> Result<(), slint::PlatformError> {
+    #[cfg(feature = "kiosk")]
+    {
+        BackendSelector::new()
+            .backend_name("linuxkms".into())
+            .renderer_name("femtovg".into())
+            .require_opengl_es()
+            .select()
+    }
+    #[cfg(not(feature = "kiosk"))]
+    {
+        BackendSelector::new()
+            .require_opengl()
+            .select()
+    }
+}
+
 fn main() -> Result<(), slint::PlatformError> {
     let _ = dotenvy::dotenv();
 
@@ -36,10 +53,10 @@ fn main() -> Result<(), slint::PlatformError> {
 
     debug::refresh(format!("starting app, workspace={WORKSPACE}"));
 
-    BackendSelector::new()
-        .require_opengl()
-        .select()
-        .expect("OpenGL backend required for video playback");
+    init_slint_backend().expect(
+        "OpenGL backend required for video playback \
+         (on Pi kiosk builds use: cargo build --release --no-default-features --features kiosk)",
+    );
 
     let database = Arc::new(
         Database::open(database_path()).expect("failed to open database"),

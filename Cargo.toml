@@ -5,10 +5,16 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+default = ["desktop"]
+desktop = ["slint/backend-winit"]
+# Direct DRM/KMS rendering — no X11/Wayland desktop (Raspberry Pi kiosk).
+kiosk = ["slint/backend-linuxkms-noseat"]
+
 [dependencies]
 notify = "8.0.0"
 walkdir = "2.5.0"
-slint = "1.17.0"
+slint = { version = "1.17.0", default-features = false, features = ["std", "compat-1-2", "renderer-femtovg"] }
 i-slint-core = { version = "1.17.0", default-features = false }
 sqlx = { version = "0.9.0", features = ["runtime-tokio", "sqlite", "migrate"] }
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros"] }

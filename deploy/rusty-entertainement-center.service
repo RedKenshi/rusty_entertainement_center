@@ -1,0 +1,25 @@
+[Unit]
+Description=Rusty Entertainment Center (KMS/DRM kiosk)
+After=local-fs.target
+ConditionPathExists=/dev/dri/card0
+
+[Service]
+Type=simple
+# User must be in groups: video, render, input (backend-linuxkms-noseat)
+User=pi
+SupplementaryGroups=video render input
+WorkingDirectory=/opt/rusty-entertainement-center
+ExecStart=/opt/rusty-entertainement-center/rusty-entertainement-center
+Restart=on-failure
+RestartSec=3
+Environment=SLINT_BACKEND=linuxkms-femtovg
+# List connectors: SLINT_DRM_OUTPUT=list  |  pick one: SLINT_DRM_OUTPUT=HDMI-A-1
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

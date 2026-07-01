@@ -471,7 +471,7 @@ pub fn wire_mpv_video_layer(
             slint::SetRenderingNotifierError::Unsupported => {
                 eprintln!(
                     "Video playback requires an OpenGL Slint backend. \
-                     Try: SLINT_BACKEND=opengl cargo run"
+                     Desktop: SLINT_BACKEND=opengl  |  Pi kiosk: --features kiosk"
                 );
             }
             _ => unreachable!("unexpected rendering notifier error"),
