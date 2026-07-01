@@ -14,6 +14,24 @@ pub struct FolderNode {
     pub reduced_duration_of_files: u64,
 }
 
+impl FolderNode {
+    /// Sort subfolders and files alphabetically by display name (case-insensitive).
+    pub fn sort_children(&mut self) {
+        self.subfolders
+            .sort_by(|left, right| cmp_name(&left.name, &right.name));
+        self.files
+            .sort_by(|left, right| cmp_name(&left.name, &right.name));
+        for subfolder in &mut self.subfolders {
+            subfolder.sort_children();
+        }
+    }
+}
+
+fn cmp_name(left: &str, right: &str) -> std::cmp::Ordering {
+    left.to_ascii_lowercase()
+        .cmp(&right.to_ascii_lowercase())
+}
+
 #[derive(Debug)]
 pub struct FileNode {
     pub path: PathBuf,

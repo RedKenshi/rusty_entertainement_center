@@ -173,6 +173,7 @@ pub fn build_tree(root: &str) -> FolderNode {
 
     // The scan root is the top of this tree; all other nodes now live under it.
     let mut root = folders.remove(root).expect("root folder not found");
+    root.sort_children();
     compute_reduced_stats(&mut root);
     root
 }
@@ -202,6 +203,7 @@ pub fn build_volume_library(workspace: &str) -> FolderNode {
         reduced_size_of_files: 0,
         reduced_duration_of_files: 0,
     };
+    root.sort_children();
     compute_reduced_stats(&mut root);
     root
 }
@@ -279,5 +281,57 @@ mod tests {
         assert_eq!(tree.reduced_number_of_file, 0);
         assert_eq!(tree.reduced_size_of_files, 0);
         assert_eq!(tree.reduced_duration_of_files, 0);
+    }
+
+    #[test]
+    fn sort_children_orders_folders_and_files_alphabetically() {
+        let mut tree = FolderNode {
+            path: PathBuf::from("/vol"),
+            name: "vol".into(),
+            subfolders: vec![
+                folder_node("/vol/zebra", "zebra"),
+                folder_node("/vol/alpha", "alpha"),
+            ],
+            files: vec![
+                file_node("/vol/wed.mkv", "wed"),
+                file_node("/vol/Mon.mkv", "Mon"),
+                file_node("/vol/abc.mkv", "abc"),
+            ],
+            reduced_number_of_file: 0,
+            reduced_size_of_files: 0,
+            reduced_duration_of_files: 0,
+        };
+
+        tree.sort_children();
+
+        assert_eq!(
+            tree.subfolders.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
+            vec!["alpha", "zebra"]
+        );
+        assert_eq!(
+            tree.files.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
+            vec!["abc", "Mon", "wed"]
+        );
+    }
+
+    fn folder_node(path: &str, name: &str) -> FolderNode {
+        FolderNode {
+            path: PathBuf::from(path),
+            name: name.into(),
+            subfolders: vec![],
+            files: vec![],
+            reduced_number_of_file: 0,
+            reduced_size_of_files: 0,
+            reduced_duration_of_files: 0,
+        }
+    }
+
+    fn file_node(path: &str, name: &str) -> FileNode {
+        FileNode {
+            path: PathBuf::from(path),
+            name: name.into(),
+            format: "MKV".into(),
+            metadata: None,
+        }
     }
 }
