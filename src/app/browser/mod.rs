@@ -7,18 +7,13 @@
 pub const WORKSPACE: &str = env!("CARGO_MANIFEST_DIR");
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
 use walkdir::WalkDir;
 
-use super::probe::probe_video;
+use super::probe::{is_video_path, probe_videos_parallel};
 use super::volumes;
 use crate::structs::{FileMetadata, FileNode, FolderNode};
-
-/// File extensions treated as playable video files. Everything else is ignored.
-const VIDEO_EXTENSIONS: &[&str] = &[
-    "mkv", "mp4", "avi", "mov", "webm", "m4v", "wmv", "flv", "mpg", "mpeg", "ts", "m2ts", "vob",
-    "ogv", "3gp",
-];
 
 /// Videos shorter than this (when duration is known) are excluded from the library.
 const MIN_DURATION_MS: u64 = 1000;
@@ -79,42 +74,83 @@ fn is_valid_video(file: &FileNode) -> bool {
     }
 }
 
-/// Returns true when `path` has a known video extension (case-insensitive).
-fn is_video_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| {
-            VIDEO_EXTENSIONS
-                .iter()
-                .any(|video_ext| ext.eq_ignore_ascii_case(video_ext))
-        })
-        .unwrap_or(false)
+fn collect_video_paths(folder: &FolderNode, out: &mut Vec<PathBuf>) {
+    for file in &folder.files {
+        if is_video_path(&file.path) {
+            out.push(file.path.clone());
+        }
+    }
+    for subfolder in &folder.subfolders {
+        collect_video_paths(subfolder, out);
+    }
 }
 
-/// Recursively scans `root` and builds a nested `FolderNode` tree.
+fn apply_probes_and_filter(folder: &mut FolderNode, probes: &HashMap<PathBuf, super::probe::VideoProbe>) {
+    folder.files.retain_mut(|file| {
+        if !is_video_path(&file.path) {
+            return false;
+        }
+        let Some(probe) = probes.get(&file.path) else {
+            return is_valid_video(file);
+        };
+        let metadata = file.metadata.get_or_insert_with(|| FileMetadata {
+            size: None,
+            duration_ms: None,
+            bitrate: None,
+            codec: None,
+            width: None,
+            height: None,
+            audio_track_count: None,
+            subtitle_track_count: None,
+        });
+        metadata.duration_ms = probe.duration_ms;
+        metadata.bitrate = probe.bitrate;
+        metadata.codec = probe.codec.clone();
+        metadata.width = probe.width;
+        metadata.height = probe.height;
+        metadata.audio_track_count = probe.audio_track_count;
+        metadata.subtitle_track_count = probe.subtitle_track_count;
+        is_valid_video(file)
+    });
+
+    for subfolder in &mut folder.subfolders {
+        apply_probes_and_filter(subfolder, probes);
+    }
+}
+
+fn finalize_tree(folder: &mut FolderNode) {
+    compute_reduced_stats(folder);
+    prune_empty_subfolders(folder);
+    folder.sort_children();
+}
+
+/// Empty library root shown before the first scan completes.
+pub fn empty_library_root(workspace: &str) -> FolderNode {
+    FolderNode {
+        path: PathBuf::from(workspace),
+        name: String::from("root"),
+        subfolders: vec![],
+        files: vec![],
+        reduced_number_of_file: 0,
+        reduced_size_of_files: 0,
+        reduced_duration_of_files: 0,
+    }
+}
+
+/// Recursively scans `root` and builds a nested `FolderNode` tree without ffprobe.
 ///
-/// Only video files meeting [`MIN_DURATION_MS`] are included. Directories with no valid videos
-/// in their subtree are omitted after stats are computed.
-///
-/// Implementation uses five passes over the filesystem:
-/// 1. Collect every directory into a flat `HashMap` keyed by full path string.
-/// 2. Walk files, filter to videos with sufficient duration, attach each `FileNode` to its parent.
-/// 3. Link folders into a tree by moving each node from the map into its parent's `subfolders`.
-/// 4. Aggregate subtree file counts, sizes, and durations into each folder's `reduced_*` fields.
-/// 5. Drop empty subfolders (no valid videos in subtree).
-pub fn build_tree(root: &str) -> FolderNode {
-    // Flat index of every directory found under `root`, keyed by absolute path.
-    // Built first so file pass can attach children without worrying about tree shape yet.
+/// Only paths with a known video extension are included as files. ffprobe runs later in
+/// [`probe_library`].
+pub fn scan_tree(root: &str) -> FolderNode {
     let mut folders: HashMap<String, FolderNode> = HashMap::new();
 
-    // Pass 1 — register all directories as empty `FolderNode`s.
     for entry in WalkDir::new(root)
         .into_iter()
         .filter_map(|e: Result<walkdir::DirEntry, walkdir::Error>| e.ok())
     {
-        let path: std::path::PathBuf = entry.path().to_path_buf();
-        let path_str: String = path.to_string_lossy().to_string();
-        let name: String = entry.file_name().to_string_lossy().to_string();
+        let path = entry.path().to_path_buf();
+        let path_str = path.to_string_lossy().to_string();
+        let name = entry.file_name().to_string_lossy().to_string();
 
         if entry.file_type().is_dir() {
             folders.insert(
@@ -129,48 +165,34 @@ pub fn build_tree(root: &str) -> FolderNode {
                     reduced_duration_of_files: 0,
                 },
             );
-        }
-    }
-
-    // Pass 2 — collect video files, probe duration, attach to parent folder.
-    for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
-        if entry.file_type().is_dir() {
             continue;
         }
 
-        let path = entry.path().to_path_buf();
-        if !is_video_file(&path) {
+        if !is_video_path(&path) {
             continue;
         }
 
         let fullname = entry.file_name().to_string_lossy().to_string();
-
-        // Split "movie.mkv" → name "movie", format "MKV".
         let (name, format) = fullname
             .rsplit_once('.')
             .map(|(name, ext)| (name.to_string(), ext.to_string().to_uppercase()))
             .unwrap_or_else(|| (fullname.clone(), String::new()));
 
-        let probe = probe_video(&path);
         let file = FileNode {
             path: path.clone(),
             name,
             format,
             metadata: Some(FileMetadata {
                 size: entry.metadata().ok().map(|m| m.len()),
-                duration_ms: probe.duration_ms,
-                bitrate: probe.bitrate,
-                codec: probe.codec,
-                width: probe.width,
-                height: probe.height,
-                audio_track_count: probe.audio_track_count,
-                subtitle_track_count: probe.subtitle_track_count,
+                duration_ms: None,
+                bitrate: None,
+                codec: None,
+                width: None,
+                height: None,
+                audio_track_count: None,
+                subtitle_track_count: None,
             }),
         };
-
-        if !is_valid_video(&file) {
-            continue;
-        }
 
         if let Some(parent) = path.parent() {
             let parent_str = parent.to_string_lossy().to_string();
@@ -180,7 +202,6 @@ pub fn build_tree(root: &str) -> FolderNode {
         }
     }
 
-    // Pass 3 — nest folders: deepest paths first so parents still exist in the map when linking.
     let mut keys: Vec<String> = folders.keys().cloned().collect();
     keys.sort_by_key(|k| std::cmp::Reverse(Path::new(k).components().count()));
 
@@ -200,26 +221,28 @@ pub fn build_tree(root: &str) -> FolderNode {
         }
     }
 
-    // The scan root is the top of this tree; all other nodes now live under it.
     let mut root = folders.remove(root).expect("root folder not found");
-    root.sort_children();
-    compute_reduced_stats(&mut root);
-    prune_empty_subfolders(&mut root);
+    finalize_tree(&mut root);
     root
 }
 
-/// Builds the top-level library tree for the app.
-///
-/// Discovers storage volumes (real mounts, or fake `volume*` folders when `FAKE_VOLUMES` is set),
-/// runs `build_tree` on each one, and returns a hidden root node whose `subfolders` are those
-/// volumes. The root itself is never shown in the UI.
-pub fn build_volume_library(workspace: &str) -> FolderNode {
+/// Runs ffprobe (in parallel) on every video in `tree`, filters short clips, and refreshes stats.
+pub fn probe_library(tree: &mut FolderNode) {
+    let mut paths = Vec::new();
+    collect_video_paths(tree, &mut paths);
+    let probes = probe_videos_parallel(&paths);
+    apply_probes_and_filter(tree, &probes);
+    finalize_tree(tree);
+}
+
+/// Fast scan of all volumes — no ffprobe.
+pub fn scan_volume_library(workspace: &str) -> FolderNode {
     let workspace_path = Path::new(workspace);
     let mut volume_nodes = Vec::new();
 
     for volume in volumes::list_volume_roots(workspace) {
         let volume_root = volume.path.to_str().expect("volume path must be valid UTF-8");
-        let mut node = build_tree(volume_root);
+        let mut node = scan_tree(volume_root);
         node.name = volume.name;
         volume_nodes.push(node);
     }
@@ -233,10 +256,16 @@ pub fn build_volume_library(workspace: &str) -> FolderNode {
         reduced_size_of_files: 0,
         reduced_duration_of_files: 0,
     };
-    root.sort_children();
-    compute_reduced_stats(&mut root);
+    finalize_tree(&mut root);
     root.subfolders
         .retain(|volume| volume.reduced_number_of_file > 0);
+    root
+}
+
+/// Full scan: directory walk plus parallel ffprobe (used by tests and sync rebuilds).
+pub fn build_volume_library(workspace: &str) -> FolderNode {
+    let mut root = scan_volume_library(workspace);
+    probe_library(&mut root);
     root
 }
 
@@ -244,7 +273,8 @@ pub fn build_volume_library(workspace: &str) -> FolderNode {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{compute_reduced_stats, is_valid_video, prune_empty_subfolders};
+    use super::{compute_reduced_stats, is_valid_video, prune_empty_subfolders, scan_tree};
+    use crate::app::probe::is_video_path;
     use crate::structs::{FileMetadata, FileNode, FolderNode};
 
     fn file_with_stats(path: &str, size: u64, duration_ms: u64) -> FileNode {
@@ -399,5 +429,27 @@ mod tests {
         assert_eq!(tree.subfolders.len(), 1);
         assert_eq!(tree.subfolders[0].name, "movies");
         assert_eq!(tree.reduced_number_of_file, 1);
+    }
+
+    #[test]
+    fn scan_tree_does_not_include_non_video_files() {
+        fn collect_files<'a>(folder: &'a FolderNode, out: &mut Vec<&'a FileNode>) {
+            out.extend(folder.files.iter());
+            for subfolder in &folder.subfolders {
+                collect_files(subfolder, out);
+            }
+        }
+
+        let workspace = env!("CARGO_MANIFEST_DIR");
+        let root = format!("{workspace}/volumeD/mkv");
+        if !Path::new(&root).is_dir() {
+            return;
+        }
+
+        let tree = scan_tree(&root);
+        let mut files = Vec::new();
+        collect_files(&tree, &mut files);
+        assert!(!files.is_empty());
+        assert!(files.iter().all(|file| is_video_path(&file.path)));
     }
 }

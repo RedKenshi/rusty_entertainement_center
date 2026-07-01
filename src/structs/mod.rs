@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FolderNode {
     pub path: PathBuf,
     pub name: String,
@@ -32,7 +32,7 @@ fn cmp_name(left: &str, right: &str) -> std::cmp::Ordering {
         .cmp(&right.to_ascii_lowercase())
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FileNode {
     pub path: PathBuf,
     pub name: String,
@@ -40,7 +40,7 @@ pub struct FileNode {
     pub metadata: Option<FileMetadata>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FileMetadata {
     pub size: Option<u64>,
     pub duration_ms: Option<u64>,

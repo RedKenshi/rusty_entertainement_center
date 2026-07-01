@@ -13,8 +13,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use app::{build_volume_library, wire_up, BrowsingState, WORKSPACE};
-use db::{Database, SettingsRepository};
+use app::{empty_library_root, wire_up, BrowsingState, WORKSPACE};
+use db::Database;
 use slint::{BackendSelector, ComponentHandle};
 
 fn database_path() -> PathBuf {
@@ -62,16 +62,9 @@ fn main() -> Result<(), slint::PlatformError> {
         Database::open(database_path()).expect("failed to open database"),
     );
 
-    let tree = build_volume_library(WORKSPACE);
-    if let Err(err) = database.block_on(db::reconcile::sync_tree(database.pool(), &tree)) {
-        debug::db(format!("initial sync_tree failed: {err}"));
-    }
-
-    database.block_on(async {
-        database.settings().get_last_opened_folder().await
-    }).ok();
-
-    let state = Rc::new(RefCell::new(BrowsingState::new(tree)));
+    let state = Rc::new(RefCell::new(BrowsingState::new(empty_library_root(
+        WORKSPACE,
+    ))));
     let window = ui::MainWindow::new()?;
 
     #[cfg(feature = "kiosk")]

@@ -9,7 +9,7 @@ mod player;
 mod probe;
 mod volumes;
 
-pub use self::browser::{build_volume_library, WORKSPACE};
+pub use self::browser::{build_volume_library, empty_library_root, WORKSPACE};
 pub use self::browsing::{ActivateResult, BrowsingState};
 
 use std::cell::RefCell;
@@ -33,6 +33,7 @@ use crate::theme;
 use crate::ui::{self, IconLoader, MainWindow};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use crate::utils::{format_playback_time, resume_position_to_store};
+use self::browser::{probe_library, scan_volume_library};
 use crate::watch;
 
 fn sync_window(window: &MainWindow, state: &BrowsingState) {
@@ -601,6 +602,56 @@ fn reconcile_tree(database: &Database, tree: &FolderNode) {
     }
 }
 
+fn spawn_library_build(tree_tx: mpsc::Sender<Result<FolderNode, ()>>, database: Arc<Database>) {
+    thread::spawn(move || {
+        let started = Instant::now();
+        debug::refresh("background library build started");
+        let build_result = catch_unwind(AssertUnwindSafe(|| {
+            let mut tree = scan_volume_library(WORKSPACE);
+            debug::refresh(format!(
+                "fast scan finished in {:?}: {} volumes, {} files",
+                started.elapsed(),
+                tree.subfolders.len(),
+                tree.reduced_number_of_file
+            ));
+            let _ = tree_tx.send(Ok(tree.clone()));
+
+            let probe_started = Instant::now();
+            probe_library(&mut tree);
+            debug::refresh(format!(
+                "probe finished in {:?}: {} files",
+                probe_started.elapsed(),
+                tree.reduced_number_of_file
+            ));
+            reconcile_tree(&database, &tree);
+            tree
+        }))
+        .map_err(|_| ());
+
+        match &build_result {
+            Ok(tree) => debug::refresh(format!(
+                "library build finished in {:?}: {} volumes, {} files",
+                started.elapsed(),
+                tree.subfolders.len(),
+                tree.reduced_number_of_file
+            )),
+            Err(()) => debug::refresh(format!(
+                "library build panicked after {:?}",
+                started.elapsed()
+            )),
+        }
+
+        match build_result {
+            Ok(tree) => {
+                let _ = tree_tx.send(Ok(tree));
+            }
+            Err(()) => {
+                let _ = tree_tx.send(Err(()));
+            }
+        }
+    });
+}
+
 fn wire_library_refresh(
     window: &MainWindow,
     browsing_state: Rc<RefCell<BrowsingState>>,
@@ -628,6 +679,10 @@ fn wire_library_refresh(
     let mut rescan_pending_logged = false;
     let mut timer_started = false;
 
+    rescanning.store(true, Ordering::Release);
+    debug::refresh("starting initial library build");
+    spawn_library_build(tree_tx.clone(), Arc::clone(&database));
+
     let timer = Rc::new(Timer::default());
     let timer_keepalive = Rc::clone(&timer);
     timer.start(TimerMode::Repeated, Duration::from_millis(250), move || {
@@ -637,11 +692,27 @@ fn wire_library_refresh(
             debug::refresh("debounce timer running");
         }
 
-        let mut latest_tree = None;
         while let Ok(result) = tree_rx.try_recv() {
             rescanning.store(false, Ordering::Release);
             match result {
-                Ok(tree) => latest_tree = Some(tree),
+                Ok(tree) => {
+                    let volume_count = tree.subfolders.len();
+                    let file_count = tree.reduced_number_of_file;
+                    let visible_before = state.borrow().visible_items().len();
+                    let Some(window) = window_weak.upgrade() else {
+                        debug::refresh("rescan done but window gone, skipping UI apply");
+                        break;
+                    };
+                    with_browsing(&state, &window, |browsing| {
+                        browsing.reload_tree(tree);
+                    });
+                    let visible_after = state.borrow().visible_items().len();
+                    debug::refresh(format!(
+                        "tree applied: {volume_count} volumes, {file_count} files total, visible {visible_before} -> {visible_after}, stack={}",
+                        state.borrow().stack.len()
+                    ));
+                    rescan_pending_logged = false;
+                }
                 Err(()) => {
                     debug::refresh("background rescan panicked, will retry");
                     dirty = true;
@@ -649,24 +720,6 @@ fn wire_library_refresh(
                     rescan_pending_logged = false;
                 }
             }
-        }
-        if let Some(tree) = latest_tree {
-            let volume_count = tree.subfolders.len();
-            let file_count = tree.reduced_number_of_file;
-            let visible_before = state.borrow().visible_items().len();
-            let Some(window) = window_weak.upgrade() else {
-                debug::refresh("rescan done but window gone, skipping UI apply");
-                return;
-            };
-            with_browsing(&state, &window, |browsing| {
-                browsing.reload_tree(tree);
-            });
-            let visible_after = state.borrow().visible_items().len();
-            debug::refresh(format!(
-                "tree applied: {volume_count} volumes, {file_count} files total, visible {visible_before} -> {visible_after}, stack={}",
-                state.borrow().stack.len()
-            ));
-            rescan_pending_logged = false;
         }
 
         while change_events.try_recv().is_ok() {
@@ -696,34 +749,7 @@ fn wire_library_refresh(
 
         dirty = false;
         rescanning.store(true, Ordering::Release);
-
-        let tree_tx = tree_tx.clone();
-        let database = Arc::clone(&database);
-        thread::spawn(move || {
-            let started = Instant::now();
-            debug::refresh("background rescan thread started");
-            let result = catch_unwind(AssertUnwindSafe(|| {
-                let tree = build_volume_library(WORKSPACE);
-                reconcile_tree(&database, &tree);
-                tree
-            }))
-            .map_err(|_| ());
-            match &result {
-                Ok(tree) => debug::refresh(format!(
-                    "background rescan finished in {:?}: {} volumes, {} files",
-                    started.elapsed(),
-                    tree.subfolders.len(),
-                    tree.reduced_number_of_file
-                )),
-                Err(()) => debug::refresh(format!(
-                    "background rescan panicked after {:?}",
-                    started.elapsed()
-                )),
-            }
-            if tree_tx.send(result).is_err() {
-                debug::refresh("failed to deliver rescan result (receiver dropped)");
-            }
-        });
+        spawn_library_build(tree_tx.clone(), Arc::clone(&database));
     });
 }
 
