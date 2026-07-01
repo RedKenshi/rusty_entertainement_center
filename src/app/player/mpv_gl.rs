@@ -2,18 +2,19 @@
 //!
 //! Based on the approach from https://github.com/maurges/slint-mpv-widget
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::{c_void, CStr, CString};
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use glow::HasContext;
 use i_slint_core::graphics::IntSize;
 use libmpv2::events::Event;
 use libmpv2::render::{OpenGLInitParams, RenderContext, RenderParam, RenderParamApiType};
-use libmpv2::Mpv;
-use slint::{BorrowedOpenGLTextureBuilder, ComponentHandle};
+use libmpv2::{Mpv, MpvInitializer, Result as MpvResult};
+use slint::{BorrowedOpenGLTextureBuilder, ComponentHandle, Timer, TimerMode};
 
 use crate::debug;
 use super::state::{PlaybackState, PlaybackStatus};
@@ -22,6 +23,8 @@ use super::tracks::{
     subtitle_track_count,
 };
 use super::{PlayerCommand, PlayerEvent};
+
+const UI_SYNC_INTERVAL: Duration = Duration::from_millis(100);
 
 struct GlCtx(&'static dyn Fn(&CStr) -> *const c_void);
 
@@ -132,6 +135,31 @@ struct MpvVideoLayer {
     texture: Option<VideoTexture>,
     playback: PlaybackState,
     needs_redraw: bool,
+    last_poll: Instant,
+}
+
+fn default_hwdec() -> &'static str {
+    #[cfg(feature = "kiosk")]
+    {
+        "v4l2m2m-copy"
+    }
+    #[cfg(not(feature = "kiosk"))]
+    {
+        "auto"
+    }
+}
+
+fn apply_mpv_options(init: MpvInitializer) -> MpvResult<()> {
+    init.set_option("vo", "libmpv")?;
+    let hwdec = std::env::var("RUSTY_MPV_HWDEC").unwrap_or_else(|_| default_hwdec().into());
+    init.set_option("hwdec", hwdec)?;
+    init.set_option("keep-open", "no")?;
+    init.set_option("video-timing-offset", "0")?;
+    init.set_option("sub-visibility", "yes")?;
+    init.set_option("sub-auto", "fuzzy")?;
+    #[cfg(feature = "kiosk")]
+    init.set_option("profile", "fast")?;
+    Ok(())
 }
 
 impl MpvVideoLayer {
@@ -143,16 +171,7 @@ impl MpvVideoLayer {
         let gl = Rc::new(gl);
 
         let mpv = Box::new(
-            Mpv::with_initializer(|init| {
-                init.set_option("vo", "libmpv")?;
-                init.set_option("hwdec", "auto")?;
-                init.set_option("keep-open", "no")?;
-                init.set_option("video-timing-offset", "0")?;
-                init.set_option("sub-visibility", "yes")?;
-                init.set_option("sub-auto", "fuzzy")?;
-                Ok(())
-            })
-            .expect("failed to create mpv"),
+            Mpv::with_initializer(apply_mpv_options).expect("failed to create mpv"),
         );
 
         let render_ctx = mpv
@@ -171,6 +190,7 @@ impl MpvVideoLayer {
         let mut render_ctx = render_ctx;
         render_ctx.set_update_callback(|| {
             NEEDS_REDRAW.with(|flag| flag.set(true));
+            request_playback_redraw();
         });
 
         Self {
@@ -180,7 +200,12 @@ impl MpvVideoLayer {
             texture: None,
             playback: PlaybackState::default(),
             needs_redraw: true,
+            last_poll: Instant::now(),
         }
+    }
+
+    fn mpv_wants_redraw(&self) -> bool {
+        self.needs_redraw || NEEDS_REDRAW.with(|flag| flag.get())
     }
 
     fn tick(
@@ -188,28 +213,33 @@ impl MpvVideoLayer {
         command_rx: &mpsc::Receiver<PlayerCommand>,
         event_tx: &mpsc::Sender<PlayerEvent>,
         player_active: bool,
-        width: u32,
-        height: u32,
         window: &crate::ui::MainWindow,
-    ) -> bool {
+    ) {
         while let Ok(command) = command_rx.try_recv() {
             self.apply_command(command, event_tx);
         }
 
         self.poll_events(event_tx);
 
-        if player_active && self.playback.path.is_some() && width > 0 && height > 0 {
-            self.sync_state_from_mpv();
-            let _ = event_tx.send(PlayerEvent::State(self.playback.clone()));
-
-            if let Some(image) = self.render_to_image(width, height) {
-                window.set_playback_video(image);
-            }
-
-            return true;
+        if !(player_active && self.playback.path.is_some()) {
+            return;
         }
 
-        false
+        let poll_due = self.last_poll.elapsed() >= UI_SYNC_INTERVAL;
+        if poll_due {
+            self.last_poll = Instant::now();
+            self.sync_playback_state();
+            let _ = event_tx.send(PlayerEvent::State(self.playback.clone()));
+        }
+
+        if self.mpv_wants_redraw() {
+            let (width, height) = self.video_render_size();
+            if width > 0 && height > 0 {
+                if let Some(image) = self.render_to_image(width, height) {
+                    window.set_playback_video(image);
+                }
+            }
+        }
     }
 
     fn render_to_image(&mut self, width: u32, height: u32) -> Option<slint::Image> {
@@ -295,6 +325,8 @@ impl MpvVideoLayer {
                     duration_ms,
                     ..PlaybackState::default()
                 };
+                self.texture = None;
+                self.last_poll = Instant::now() - UI_SYNC_INTERVAL;
                 self.needs_redraw = true;
                 false
             }
@@ -376,6 +408,18 @@ impl MpvVideoLayer {
                     }
                     break;
                 }
+                Some(Ok(Event::FileLoaded)) => {
+                    self.refresh_tracks();
+                    self.texture = None;
+                    self.needs_redraw = true;
+                }
+                Some(Ok(Event::VideoReconfig)) => {
+                    self.texture = None;
+                    self.needs_redraw = true;
+                }
+                Some(Ok(Event::PlaybackRestart | Event::Seek)) => {
+                    self.needs_redraw = true;
+                }
                 Some(Ok(Event::LogMessage { level, text, .. })) => {
                     debug::player(format!("mpv [{level}]: {text}"));
                 }
@@ -389,7 +433,7 @@ impl MpvVideoLayer {
         }
     }
 
-    fn sync_state_from_mpv(&mut self) {
+    fn sync_playback_state(&mut self) {
         if self.playback.path.is_none() {
             return;
         }
@@ -409,8 +453,24 @@ impl MpvVideoLayer {
                 self.playback.duration_ms = Some((duration_secs * 1000.0) as u64);
             }
         }
+    }
 
-        self.refresh_tracks();
+    fn video_render_size(&self) -> (u32, u32) {
+        fn read_positive(mpv: &Mpv, key: &str) -> u32 {
+            mpv.get_property::<i64>(key)
+                .ok()
+                .filter(|value| *value > 0)
+                .map(|value| value as u32)
+                .unwrap_or(0)
+        }
+
+        let width = read_positive(&self.mpv, "video-params/w").max(read_positive(&self.mpv, "dwidth"));
+        let height = read_positive(&self.mpv, "video-params/h").max(read_positive(&self.mpv, "dheight"));
+        if width > 0 && height > 0 {
+            (width, height)
+        } else {
+            (1280, 720)
+        }
     }
 
     fn refresh_tracks(&mut self) {
@@ -429,11 +489,26 @@ impl MpvVideoLayer {
         self.playback = PlaybackState::default();
         self.texture = None;
         self.needs_redraw = true;
+        self.last_poll = Instant::now();
     }
 }
 
 thread_local! {
-    static NEEDS_REDRAW: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static NEEDS_REDRAW: Cell<bool> = const { Cell::new(false) };
+    static REDRAW_WINDOW: RefCell<Option<slint::Weak<crate::ui::MainWindow>>> =
+        const { RefCell::new(None) };
+}
+
+fn request_playback_redraw() {
+    let window_weak = REDRAW_WINDOW.with(|slot| slot.borrow().clone());
+    let Some(window_weak) = window_weak else {
+        return;
+    };
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(window) = window_weak.upgrade() {
+            window.window().request_redraw();
+        }
+    });
 }
 
 pub fn wire_mpv_video_layer(
@@ -442,6 +517,25 @@ pub fn wire_mpv_video_layer(
     event_tx: mpsc::Sender<PlayerEvent>,
     player_active: Rc<RefCell<bool>>,
 ) {
+    REDRAW_WINDOW.with(|slot| *slot.borrow_mut() = Some(window.as_weak()));
+
+    let window_weak_poll = window.as_weak();
+    let player_active_poll = Rc::clone(&player_active);
+    let poll_timer = Rc::new(Timer::default());
+    let poll_timer_keepalive = Rc::clone(&poll_timer);
+    poll_timer.start(TimerMode::Repeated, UI_SYNC_INTERVAL, move || {
+        let _keepalive = poll_timer_keepalive.clone();
+        if !*player_active_poll.borrow() {
+            return;
+        }
+        let Some(app) = window_weak_poll.upgrade() else {
+            return;
+        };
+        app.window().request_redraw();
+    });
+    let _poll_timer = poll_timer;
+
+    let player_active_render = Rc::clone(&player_active);
     let window_weak = window.as_weak();
     let mut layer: Option<MpvVideoLayer> = None;
 
@@ -474,22 +568,8 @@ pub fn wire_mpv_video_layer(
                     return;
                 };
 
-                let size = app.window().size();
-                let width = size.width;
-                let height = size.height;
-                let active = *player_active.borrow();
-
-                let keep_animating = layer.tick(
-                    &command_rx,
-                    &event_tx,
-                    active,
-                    width,
-                    height,
-                    &app,
-                );
-                if keep_animating {
-                    app.window().request_redraw();
-                }
+                let active = *player_active_render.borrow();
+                layer.tick(&command_rx, &event_tx, active, &app);
             }
             slint::RenderingState::RenderingTeardown => {
                 drop(layer.take());

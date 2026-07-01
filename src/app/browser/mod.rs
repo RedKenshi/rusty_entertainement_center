@@ -20,6 +20,9 @@ const VIDEO_EXTENSIONS: &[&str] = &[
     "ogv", "3gp",
 ];
 
+/// Videos shorter than this (when duration is known) are excluded from the library.
+const MIN_DURATION_MS: u64 = 1000;
+
 fn file_size(file: &FileNode) -> u64 {
     file.metadata
         .as_ref()
@@ -55,6 +58,27 @@ fn compute_reduced_stats(folder: &mut FolderNode) {
     folder.reduced_duration_of_files = direct_duration + child_duration;
 }
 
+/// Removes subfolders whose subtree contains no valid video files.
+fn prune_empty_subfolders(folder: &mut FolderNode) {
+    for subfolder in &mut folder.subfolders {
+        prune_empty_subfolders(subfolder);
+    }
+    folder
+        .subfolders
+        .retain(|subfolder| subfolder.reduced_number_of_file > 0);
+}
+
+fn is_valid_video(file: &FileNode) -> bool {
+    match file
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.duration_ms)
+    {
+        Some(duration_ms) => duration_ms >= MIN_DURATION_MS,
+        None => true,
+    }
+}
+
 /// Returns true when `path` has a known video extension (case-insensitive).
 fn is_video_file(path: &Path) -> bool {
     path.extension()
@@ -69,14 +93,15 @@ fn is_video_file(path: &Path) -> bool {
 
 /// Recursively scans `root` and builds a nested `FolderNode` tree.
 ///
-/// Only video files are included as `FileNode` entries. All directories under `root` become
-/// folders, even when empty.
+/// Only video files meeting [`MIN_DURATION_MS`] are included. Directories with no valid videos
+/// in their subtree are omitted after stats are computed.
 ///
-/// Implementation uses four passes over the filesystem:
+/// Implementation uses five passes over the filesystem:
 /// 1. Collect every directory into a flat `HashMap` keyed by full path string.
-/// 2. Walk files, filter to videos, attach each `FileNode` to its parent folder in the map.
+/// 2. Walk files, filter to videos with sufficient duration, attach each `FileNode` to its parent.
 /// 3. Link folders into a tree by moving each node from the map into its parent's `subfolders`.
 /// 4. Aggregate subtree file counts, sizes, and durations into each folder's `reduced_*` fields.
+/// 5. Drop empty subfolders (no valid videos in subtree).
 pub fn build_tree(root: &str) -> FolderNode {
     // Flat index of every directory found under `root`, keyed by absolute path.
     // Built first so file pass can attach children without worrying about tree shape yet.
@@ -143,6 +168,10 @@ pub fn build_tree(root: &str) -> FolderNode {
             }),
         };
 
+        if !is_valid_video(&file) {
+            continue;
+        }
+
         if let Some(parent) = path.parent() {
             let parent_str = parent.to_string_lossy().to_string();
             if let Some(parent_folder) = folders.get_mut(&parent_str) {
@@ -175,6 +204,7 @@ pub fn build_tree(root: &str) -> FolderNode {
     let mut root = folders.remove(root).expect("root folder not found");
     root.sort_children();
     compute_reduced_stats(&mut root);
+    prune_empty_subfolders(&mut root);
     root
 }
 
@@ -205,14 +235,16 @@ pub fn build_volume_library(workspace: &str) -> FolderNode {
     };
     root.sort_children();
     compute_reduced_stats(&mut root);
+    root.subfolders
+        .retain(|volume| volume.reduced_number_of_file > 0);
     root
 }
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
-    use super::compute_reduced_stats;
+    use super::{compute_reduced_stats, is_valid_video, prune_empty_subfolders};
     use crate::structs::{FileMetadata, FileNode, FolderNode};
 
     fn file_with_stats(path: &str, size: u64, duration_ms: u64) -> FileNode {
@@ -238,9 +270,14 @@ mod tests {
         subfolders: Vec<FolderNode>,
         files: Vec<FileNode>,
     ) -> FolderNode {
+        let name = Path::new(path)
+            .file_name()
+            .and_then(|segment| segment.to_str())
+            .unwrap_or(path)
+            .to_string();
         FolderNode {
             path: PathBuf::from(path),
-            name: path.rsplit('/').next_back().unwrap_or(path).to_string(),
+            name,
             subfolders,
             files,
             reduced_number_of_file: 0,
@@ -333,5 +370,34 @@ mod tests {
             format: "MKV".into(),
             metadata: None,
         }
+    }
+
+    #[test]
+    fn is_valid_video_rejects_short_clips_and_keeps_unknown_duration() {
+        assert!(!is_valid_video(&file_with_stats("/a.mkv", 1, 999)));
+        assert!(is_valid_video(&file_with_stats("/b.mkv", 1, 1000)));
+        assert!(is_valid_video(&file_node("/c.mkv", "c")));
+    }
+
+    #[test]
+    fn prune_empty_subfolders_removes_folders_without_valid_videos() {
+        let mut tree = folder(
+            "/volumeD",
+            vec![
+                folder("/volumeD/empty", vec![], vec![]),
+                folder(
+                    "/volumeD/movies",
+                    vec![],
+                    vec![file_with_stats("/volumeD/movies/full.mkv", 100, 60_000)],
+                ),
+            ],
+            vec![],
+        );
+        compute_reduced_stats(&mut tree);
+        prune_empty_subfolders(&mut tree);
+
+        assert_eq!(tree.subfolders.len(), 1);
+        assert_eq!(tree.subfolders[0].name, "movies");
+        assert_eq!(tree.reduced_number_of_file, 1);
     }
 }

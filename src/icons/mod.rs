@@ -1,5 +1,6 @@
 use std::fs;
-use std::path::Path;
+use std::path::PathBuf;
+use std::sync::LazyLock;
 
 #[derive(Debug, Clone, Default)]
 pub struct IconData {
@@ -9,11 +10,31 @@ pub struct IconData {
     pub viewbox_height: f32,
 }
 
-const ICONS_ROOT: &str = "assets/icons/svgs";
+static ICONS_ROOT: LazyLock<PathBuf> = LazyLock::new(resolve_icons_root);
+
+fn resolve_icons_root() -> PathBuf {
+    if let Ok(dir) = std::env::var("RUSTY_ASSETS_DIR") {
+        let path = PathBuf::from(dir).join("assets/icons/app");
+        if path.join("duotone").is_dir() {
+            return path;
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let bundled = dir.join("assets/icons/app");
+            if bundled.join("duotone").is_dir() {
+                return bundled;
+            }
+        }
+    }
+
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/icons/app")
+}
 
 pub fn load_icon(name: &str, style: &str) -> IconData {
     let style_dir = style_to_dir(style);
-    let svg_path = Path::new(ICONS_ROOT).join(style_dir).join(format!("{name}.svg"));
+    let svg_path = ICONS_ROOT.join(style_dir).join(format!("{name}.svg"));
 
     match fs::read_to_string(&svg_path) {
         Ok(content) => parse_svg(&content),
@@ -114,16 +135,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn loads_solid_hard_drive() {
-        let icon = load_icon("hard-drive", "solid");
+    fn loads_regular_database_icon() {
+        let icon = load_icon("database", "regular");
         assert!(!icon.primary_path.is_empty());
         assert!(icon.secondary_path.is_empty());
-        assert_eq!(icon.viewbox_width, 512.0);
+        assert!(icon.viewbox_width > 0.0);
     }
 
     #[test]
-    fn loads_duotone_hard_drive_with_two_paths() {
-        let icon = load_icon("hard-drive", "duotone");
+    fn loads_duotone_files_with_two_paths() {
+        let icon = load_icon("files", "duotone");
         assert!(!icon.primary_path.is_empty());
         assert!(!icon.secondary_path.is_empty());
     }

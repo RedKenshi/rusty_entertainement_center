@@ -13,6 +13,7 @@ ExecStart=/opt/rusty-entertainement-center/rusty-entertainement-center
 Restart=on-failure
 RestartSec=3
 Environment=SLINT_BACKEND=linuxkms-femtovg
+# Pi 5 hardware decode override: Environment=RUSTY_MPV_HWDEC=drm-copy
 # List connectors: SLINT_DRM_OUTPUT=list  |  pick one: SLINT_DRM_OUTPUT=HDMI-A-1
 TTYPath=/dev/tty1
 TTYReset=yes
