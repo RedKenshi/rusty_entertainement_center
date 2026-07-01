@@ -16,7 +16,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
@@ -602,42 +602,94 @@ fn reconcile_tree(database: &Database, tree: &FolderNode) {
     }
 }
 
-fn spawn_library_build(tree_tx: mpsc::Sender<Result<FolderNode, ()>>, database: Arc<Database>) {
+/// Fast scan preview (UI can show files early) vs fully probed library.
+enum LibraryBuildStage {
+    Preview(FolderNode),
+    Complete(FolderNode),
+}
+
+fn spawn_library_build(
+    tree_tx: mpsc::Sender<Result<LibraryBuildStage, ()>>,
+    database: Arc<Database>,
+    build_id: u64,
+    current_build: Arc<AtomicU64>,
+) {
     thread::spawn(move || {
         let started = Instant::now();
-        debug::scan("library build started");
+        let is_current = || current_build.load(Ordering::Acquire) == build_id;
+
+        debug::scan(format!("library build started (id={build_id})"));
         let build_result = catch_unwind(AssertUnwindSafe(|| {
             let mut tree = scan_volume_library(WORKSPACE);
-            let _ = tree_tx.send(Ok(tree.clone()));
+            if is_current() {
+                let _ = tree_tx.send(Ok(LibraryBuildStage::Preview(tree.clone())));
+            } else {
+                debug::scan(format!(
+                    "library build {build_id} cancelled after fast scan (superseded)"
+                ));
+                return tree;
+            }
 
             probe_library(&mut tree);
-            reconcile_tree(&database, &tree);
+            if is_current() {
+                reconcile_tree(&database, &tree);
+            }
             tree
         }))
         .map_err(|_| ());
 
+        if !is_current() {
+            debug::scan(format!(
+                "library build {build_id} discarded after {:?} (superseded)",
+                started.elapsed()
+            ));
+            return;
+        }
+
         match &build_result {
             Ok(tree) => debug::scan(format!(
-                "library build finished in {:?}: {} volume(s), {} file(s)",
+                "library build {build_id} finished in {:?}: {} volume(s), {} file(s)",
                 started.elapsed(),
                 tree.subfolders.len(),
                 tree.reduced_number_of_file
             )),
             Err(()) => debug::scan(format!(
-                "library build panicked after {:?}",
+                "library build {build_id} panicked after {:?}",
                 started.elapsed()
             )),
         }
 
         match build_result {
             Ok(tree) => {
-                let _ = tree_tx.send(Ok(tree));
+                let _ = tree_tx.send(Ok(LibraryBuildStage::Complete(tree)));
             }
             Err(()) => {
                 let _ = tree_tx.send(Err(()));
             }
         }
     });
+}
+
+fn apply_library_tree(
+    window_weak: &slint::Weak<MainWindow>,
+    state: &Rc<RefCell<BrowsingState>>,
+    tree: FolderNode,
+    stage: &str,
+) {
+    let volume_count = tree.subfolders.len();
+    let file_count = tree.reduced_number_of_file;
+    let visible_before = state.borrow().visible_items().len();
+    let Some(window) = window_weak.upgrade() else {
+        debug::refresh(format!("{stage} tree ready but window gone, skipping UI apply"));
+        return;
+    };
+    with_browsing(state, &window, |browsing| {
+        browsing.reload_tree(tree);
+    });
+    let visible_after = state.borrow().visible_items().len();
+    debug::scan(format!(
+        "tree applied to UI ({stage}): {volume_count} volume(s), {file_count} file(s), visible {visible_before} -> {visible_after}"
+    ));
 }
 
 fn wire_library_refresh(
@@ -658,18 +710,35 @@ fn wire_library_refresh(
             .join(",")
     ));
     let change_events = watch::watch_paths(&watch_roots);
-    let (tree_tx, tree_rx) = mpsc::channel::<Result<FolderNode, ()>>();
+    let (tree_tx, tree_rx) = mpsc::channel::<Result<LibraryBuildStage, ()>>();
     let window_weak = window.as_weak();
     let state = Rc::clone(&browsing_state);
     let rescanning = Rc::new(AtomicBool::new(false));
+    let build_generation = Arc::new(AtomicU64::new(0));
     let mut dirty = false;
     let mut last_change: Option<Instant> = None;
     let mut rescan_pending_logged = false;
     let mut timer_started = false;
 
-    rescanning.store(true, Ordering::Release);
+    let start_build = {
+        let tree_tx = tree_tx.clone();
+        let database = Arc::clone(&database);
+        let build_generation = Arc::clone(&build_generation);
+        let rescanning = Rc::clone(&rescanning);
+        move || {
+            let build_id = build_generation.fetch_add(1, Ordering::AcqRel) + 1;
+            rescanning.store(true, Ordering::Release);
+            spawn_library_build(
+                tree_tx.clone(),
+                Arc::clone(&database),
+                build_id,
+                Arc::clone(&build_generation),
+            );
+        }
+    };
+
     debug::scan("starting initial library build");
-    spawn_library_build(tree_tx.clone(), Arc::clone(&database));
+    start_build();
 
     let timer = Rc::new(Timer::default());
     let timer_keepalive = Rc::clone(&timer);
@@ -681,26 +750,17 @@ fn wire_library_refresh(
         }
 
         while let Ok(result) = tree_rx.try_recv() {
-            rescanning.store(false, Ordering::Release);
             match result {
-                Ok(tree) => {
-                    let volume_count = tree.subfolders.len();
-                    let file_count = tree.reduced_number_of_file;
-                    let visible_before = state.borrow().visible_items().len();
-                    let Some(window) = window_weak.upgrade() else {
-                        debug::refresh("rescan done but window gone, skipping UI apply");
-                        break;
-                    };
-                    with_browsing(&state, &window, |browsing| {
-                        browsing.reload_tree(tree);
-                    });
-                    let visible_after = state.borrow().visible_items().len();
-                    debug::scan(format!(
-                        "tree applied to UI: {volume_count} volume(s), {file_count} file(s), visible {visible_before} -> {visible_after}"
-                    ));
+                Ok(LibraryBuildStage::Preview(tree)) => {
+                    apply_library_tree(&window_weak, &state, tree, "preview");
+                }
+                Ok(LibraryBuildStage::Complete(tree)) => {
+                    rescanning.store(false, Ordering::Release);
+                    apply_library_tree(&window_weak, &state, tree, "complete");
                     rescan_pending_logged = false;
                 }
                 Err(()) => {
+                    rescanning.store(false, Ordering::Release);
                     debug::refresh("background rescan panicked, will retry");
                     dirty = true;
                     last_change = Some(Instant::now());
@@ -735,8 +795,7 @@ fn wire_library_refresh(
         }
 
         dirty = false;
-        rescanning.store(true, Ordering::Release);
-        spawn_library_build(tree_tx.clone(), Arc::clone(&database));
+        start_build();
     });
 }
 
