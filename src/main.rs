@@ -74,6 +74,9 @@ fn main() -> Result<(), slint::PlatformError> {
     let state = Rc::new(RefCell::new(BrowsingState::new(tree)));
     let window = ui::MainWindow::new()?;
 
+    #[cfg(feature = "kiosk")]
+    window.window().set_fullscreen(true);
+
     wire_up(&window, state, database);
 
     window.run()?;
