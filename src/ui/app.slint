@@ -49,6 +49,8 @@ export component MainWindow inherits Window {
     in-out property <float> playback_progress: 0;
     in-out property <bool> playback_playing: false;
     in-out property <image> playback_video;
+    in-out property <bool> playback_toast_visible: false;
+    in-out property <string> playback_toast_text: "";
 
     private property <length> top-space: 8px;
     private property <length> bottom-space: 80px;
@@ -253,7 +255,7 @@ export component MainWindow inherits Window {
             }
         }
         KeyBinding {
-            keys: @keys(K);
+            keys: @keys(S);
             activated => {
                 if root.player_active {
                     root.playback_cycle_subtitle();
@@ -274,6 +276,27 @@ export component MainWindow inherits Window {
                     height: 100%;
                     source: root.playback_video;
                     image-fit: cover;
+                }
+
+                if root.playback_toast_visible: HorizontalLayout {
+                    width: 100%;
+                    padding-top: 12px;
+                    padding-right: 12px;
+                    alignment: end;
+
+                    Rectangle {
+                        background: Colors.primary-10;
+                        border-radius: 4px;
+
+                        HorizontalLayout {
+                            padding: 8px;
+
+                            Text {
+                                text: root.playback_toast_text;
+                                color: Colors.primary-50;
+                            }
+                        }
+                    }
                 }
 
                 VerticalLayout {

@@ -8,7 +8,6 @@ pub enum PlaybackStatus {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct TrackInfo {
     pub index: u32,
     pub label: String,

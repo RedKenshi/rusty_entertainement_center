@@ -1,5 +1,6 @@
 mod mpv_gl;
 mod state;
+mod tracks;
 
 pub use state::{PlaybackState, PlaybackStatus};
 
@@ -27,6 +28,8 @@ pub enum PlayerCommand {
 pub enum PlayerEvent {
     State(PlaybackState),
     Stopped,
+    /// Brief on-screen label after cycling audio or subtitle tracks.
+    TrackToast(String),
 }
 
 /// UI-facing handle: enqueue commands to the mpv render loop.

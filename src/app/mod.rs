@@ -226,6 +226,35 @@ fn enter_player_mode(window: &MainWindow, player_active: &RefCell<bool>) {
     window.window().request_redraw();
 }
 
+fn hide_playback_toast(window: &MainWindow) {
+    window.set_playback_toast_visible(false);
+    window.set_playback_toast_text("".into());
+}
+
+fn show_playback_toast(
+    window: &MainWindow,
+    toast_timer: &Rc<RefCell<Option<Timer>>>,
+    text: String,
+) {
+    if let Some(timer) = toast_timer.borrow_mut().take() {
+        timer.stop();
+    }
+
+    window.set_playback_toast_text(text.into());
+    window.set_playback_toast_visible(true);
+
+    let window_weak = window.as_weak();
+    let toast_timer_in_closure = Rc::clone(toast_timer);
+    let hide_timer = Timer::default();
+    hide_timer.start(TimerMode::SingleShot, Duration::from_millis(3000), move || {
+        if let Some(window) = window_weak.upgrade() {
+            hide_playback_toast(&window);
+        }
+        toast_timer_in_closure.borrow_mut().take();
+    });
+    *toast_timer.borrow_mut() = Some(hide_timer);
+}
+
 fn exit_player_mode(window: &MainWindow, player_active: &RefCell<bool>) {
     *player_active.borrow_mut() = false;
     window.set_player_active(false);
@@ -235,6 +264,7 @@ fn exit_player_mode(window: &MainWindow, player_active: &RefCell<bool>) {
     window.set_playback_progress(0.0);
     window.set_playback_playing(false);
     window.set_playback_video(slint::Image::default());
+    hide_playback_toast(window);
 }
 
 fn sync_playback_ui(window: &MainWindow, state: &PlaybackState) {
@@ -306,6 +336,7 @@ fn wire_player(
     const RESUME_SAVE_INTERVAL: Duration = Duration::from_secs(15);
 
     let last_state = Rc::new(RefCell::new(PlaybackState::default()));
+    let toast_timer = Rc::new(RefCell::new(None::<Timer>));
 
     let player_toggle = player.clone();
     window.on_playback_toggle_pause(move || {
@@ -369,6 +400,7 @@ fn wire_player(
 
     let event_rx = event_rx;
     let last_state_timer = Rc::clone(&last_state);
+    let toast_timer_events = Rc::clone(&toast_timer);
     let timer = Rc::new(Timer::default());
     let timer_keepalive = Rc::clone(&timer);
     timer.start(TimerMode::Repeated, Duration::from_millis(100), move || {
@@ -409,11 +441,17 @@ fn wire_player(
                             Some(&resume_cache_timer),
                         );
                     }
+                    if let Some(timer) = toast_timer_events.borrow_mut().take() {
+                        timer.stop();
+                    }
                     exit_player_mode(&window, &player_active_timer);
                     apply_resume_cache(&browsing_timer, &resume_cache_timer.borrow());
                     sync_window(&window, &browsing_timer.borrow());
                     *last_state_timer.borrow_mut() = PlaybackState::default();
                     last_status = PlaybackStatus::Stopped;
+                }
+                PlayerEvent::TrackToast(text) => {
+                    show_playback_toast(&window, &toast_timer_events, text);
                 }
             }
         }

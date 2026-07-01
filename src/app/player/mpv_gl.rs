@@ -17,6 +17,10 @@ use slint::{BorrowedOpenGLTextureBuilder, ComponentHandle};
 
 use crate::debug;
 use super::state::{PlaybackState, PlaybackStatus};
+use super::tracks::{
+    audio_track_count, current_audio_label, current_subtitle_label, refresh_playback_tracks,
+    subtitle_track_count,
+};
 use super::{PlayerCommand, PlayerEvent};
 
 struct GlCtx(&'static dyn Fn(&CStr) -> *const c_void);
@@ -144,6 +148,8 @@ impl MpvVideoLayer {
                 init.set_option("hwdec", "auto")?;
                 init.set_option("keep-open", "no")?;
                 init.set_option("video-timing-offset", "0")?;
+                init.set_option("sub-visibility", "yes")?;
+                init.set_option("sub-auto", "fuzzy")?;
                 Ok(())
             })
             .expect("failed to create mpv"),
@@ -187,7 +193,7 @@ impl MpvVideoLayer {
         window: &crate::ui::MainWindow,
     ) -> bool {
         while let Ok(command) = command_rx.try_recv() {
-            self.apply_command(command);
+            self.apply_command(command, event_tx);
         }
 
         self.poll_events(event_tx);
@@ -259,7 +265,7 @@ impl MpvVideoLayer {
         })
     }
 
-    fn apply_command(&mut self, command: PlayerCommand) -> bool {
+    fn apply_command(&mut self, command: PlayerCommand, event_tx: &mpsc::Sender<PlayerEvent>) -> bool {
         match command {
             PlayerCommand::Open {
                 path,
@@ -338,11 +344,21 @@ impl MpvVideoLayer {
                 false
             }
             PlayerCommand::CycleAudioTrack => {
+                if audio_track_count(&self.mpv) <= 1 {
+                    return false;
+                }
                 let _ = self.mpv.command("cycle", &["audio"]);
+                self.refresh_tracks();
+                let _ = event_tx.send(PlayerEvent::TrackToast(current_audio_label(&self.mpv)));
                 false
             }
             PlayerCommand::CycleSubtitleTrack => {
+                if subtitle_track_count(&self.mpv) == 0 {
+                    return false;
+                }
                 let _ = self.mpv.command("cycle", &["sub"]);
+                self.refresh_tracks();
+                let _ = event_tx.send(PlayerEvent::TrackToast(current_subtitle_label(&self.mpv)));
                 false
             }
             PlayerCommand::Shutdown => false,
@@ -393,6 +409,20 @@ impl MpvVideoLayer {
                 self.playback.duration_ms = Some((duration_secs * 1000.0) as u64);
             }
         }
+
+        self.refresh_tracks();
+    }
+
+    fn refresh_tracks(&mut self) {
+        refresh_playback_tracks(
+            &self.mpv,
+            &mut self.playback.audio_tracks,
+            &mut self.playback.subtitle_tracks,
+        );
+        self.playback.selected_audio = super::tracks::current_aid(&self.mpv)
+            .map(|id| id as u32)
+            .unwrap_or(0);
+        self.playback.selected_subtitle = super::tracks::current_sid(&self.mpv).map(|id| id as u32);
     }
 
     fn reset_playback(&mut self) {
