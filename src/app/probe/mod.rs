@@ -22,6 +22,18 @@ pub struct VideoProbe {
     pub subtitle_track_count: Option<u32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VideoProbeOutcome {
+    Ok(VideoProbe),
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProbeBatchResult {
+    pub ffprobe_available: bool,
+    pub results: HashMap<PathBuf, VideoProbeOutcome>,
+}
+
 static FFPROBE_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
 /// File extensions treated as video — must match the scanner (`browser`).
@@ -30,7 +42,24 @@ pub const VIDEO_EXTENSIONS: &[&str] = &[
     "ogv", "3gp",
 ];
 
+/// macOS AppleDouble sidecar (resource fork / metadata on exFAT, FAT, etc.).
+/// Appears as `._filename` next to `filename` when the drive was used on a Mac.
+pub fn is_apple_double_name(name: &str) -> bool {
+    name.starts_with("._")
+}
+
+/// Dot-prefixed names and AppleDouble sidecars — skipped during library scans.
+pub fn should_ignore_entry_name(name: &str) -> bool {
+    name.starts_with('.') || is_apple_double_name(name)
+}
+
 pub fn is_video_path(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    if should_ignore_entry_name(name) {
+        return false;
+    }
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| {
@@ -53,6 +82,11 @@ fn ffprobe_available() -> bool {
     })
 }
 
+/// Whether ffprobe is on PATH (cached after first check).
+pub fn is_ffprobe_available() -> bool {
+    ffprobe_available()
+}
+
 pub fn probe_worker_count() -> usize {
     std::env::var("RUSTY_PROBE_WORKERS")
         .ok()
@@ -62,20 +96,27 @@ pub fn probe_worker_count() -> usize {
 }
 
 /// Probes metadata for many video paths in parallel. Non-video paths are skipped.
-pub fn probe_videos_parallel(paths: &[PathBuf]) -> HashMap<PathBuf, VideoProbe> {
+pub fn probe_videos_parallel(paths: &[PathBuf]) -> ProbeBatchResult {
     let paths: Vec<PathBuf> = paths
         .iter()
         .filter(|path| is_video_path(path))
         .cloned()
         .collect();
 
-    if paths.is_empty() || !ffprobe_available() {
-        if paths.is_empty() {
-            debug::scan("probe: no video paths");
-        } else {
-            debug::scan("probe: ffprobe not available");
-        }
-        return HashMap::new();
+    if paths.is_empty() {
+        debug::scan("probe: no video paths");
+        return ProbeBatchResult {
+            ffprobe_available: ffprobe_available(),
+            results: HashMap::new(),
+        };
+    }
+
+    if !ffprobe_available() {
+        debug::scan("probe: ffprobe not available");
+        return ProbeBatchResult {
+            ffprobe_available: false,
+            results: HashMap::new(),
+        };
     }
 
     let workers = probe_worker_count().min(paths.len());
@@ -103,15 +144,21 @@ pub fn probe_videos_parallel(paths: &[PathBuf]) -> HashMap<PathBuf, VideoProbe> 
                     path.display()
                 ));
                 let started = Instant::now();
-                let probe = probe_video(&path);
+                let outcome = probe_video_outcome(&path);
+                let (duration_ms, codec, status) = match &outcome {
+                    VideoProbeOutcome::Ok(probe) => (
+                        probe.duration_ms,
+                        probe.codec.clone(),
+                        "ok",
+                    ),
+                    VideoProbeOutcome::Failed => (None, None, "failed"),
+                };
                 debug::scan(format!(
-                    "  probe done (worker {worker_index}): {} in {:?} duration={:?} codec={:?}",
+                    "  probe done (worker {worker_index}): {} in {:?} duration={duration_ms:?} codec={codec:?} — {status}",
                     path.display(),
                     started.elapsed(),
-                    probe.duration_ms,
-                    probe.codec
                 ));
-                results.insert(path, probe);
+                results.insert(path, outcome);
             }
             results
         }));
@@ -124,21 +171,24 @@ pub fn probe_videos_parallel(paths: &[PathBuf]) -> HashMap<PathBuf, VideoProbe> 
         }
     }
     debug::scan(format!("probe: merged {} result(s)", merged.len()));
-    merged
+    ProbeBatchResult {
+        ffprobe_available: true,
+        results: merged,
+    }
 }
 
 /// Probes duration, codec, dimensions, bitrates, and stream counts in one ffprobe call.
-pub fn probe_video(path: &Path) -> VideoProbe {
+pub fn probe_video_outcome(path: &Path) -> VideoProbeOutcome {
     if !is_video_path(path) {
-        return VideoProbe::default();
+        return VideoProbeOutcome::Failed;
     }
 
     if !ffprobe_available() {
-        return VideoProbe::default();
+        return VideoProbeOutcome::Failed;
     }
 
     let Some(path_str) = path.to_str() else {
-        return VideoProbe::default();
+        return VideoProbeOutcome::Failed;
     };
 
     let output = match Command::new("ffprobe")
@@ -156,14 +206,22 @@ pub fn probe_video(path: &Path) -> VideoProbe {
         .output()
     {
         Ok(output) => output,
-        Err(_) => return VideoProbe::default(),
+        Err(_) => return VideoProbeOutcome::Failed,
     };
 
     if !output.status.success() {
-        return VideoProbe::default();
+        return VideoProbeOutcome::Failed;
     }
 
-    parse_ffprobe_output(&String::from_utf8_lossy(&output.stdout))
+    VideoProbeOutcome::Ok(parse_ffprobe_output(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// Probes a single path; returns empty metadata when ffprobe is unavailable or the probe fails.
+pub fn probe_video(path: &Path) -> VideoProbe {
+    match probe_video_outcome(path) {
+        VideoProbeOutcome::Ok(probe) => probe,
+        VideoProbeOutcome::Failed => VideoProbe::default(),
+    }
 }
 
 fn parse_ffprobe_output(output: &str) -> VideoProbe {
@@ -251,7 +309,21 @@ mod tests {
     }
 
     #[test]
+    fn is_video_path_rejects_hidden_and_apple_double_sidecars() {
+        assert!(!is_video_path(Path::new("/a/._film.mkv")));
+        assert!(!is_video_path(Path::new("/a/.hidden.mkv")));
+        assert!(should_ignore_entry_name(".Spotlight-V100"));
+        assert!(should_ignore_entry_name("._film.mkv"));
+        assert!(should_ignore_entry_name(".DS_Store"));
+        assert!(!should_ignore_entry_name("film.mkv"));
+    }
+
+    #[test]
     fn probe_video_skips_non_video_paths() {
+        assert_eq!(
+            probe_video_outcome(Path::new("/a/photo.jpg")),
+            VideoProbeOutcome::Failed
+        );
         assert_eq!(
             probe_video(Path::new("/a/photo.jpg")),
             VideoProbe::default()
@@ -259,10 +331,13 @@ mod tests {
     }
 
     #[test]
-    fn probe_returns_none_for_missing_file() {
+    fn probe_outcome_is_failed_for_missing_file() {
+        if !is_ffprobe_available() {
+            return;
+        }
         assert_eq!(
-            probe_video(Path::new("/no/such/video.mkv")),
-            VideoProbe::default()
+            probe_video_outcome(Path::new("/no/such/video.mkv")),
+            VideoProbeOutcome::Failed
         );
     }
 

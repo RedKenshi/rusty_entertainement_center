@@ -12,13 +12,40 @@ use std::time::Instant;
 
 use walkdir::WalkDir;
 
-use super::probe::{is_video_path, probe_videos_parallel};
+use super::probe::{is_video_path, probe_videos_parallel, should_ignore_entry_name};
 use super::volumes;
 use crate::debug;
 use crate::structs::{FileMetadata, FileNode, FolderNode};
 
 /// Videos shorter than this (when duration is known) are excluded from the library.
 const MIN_DURATION_MS: u64 = 1000;
+
+/// Media lives in this folder at the root of each mounted volume (e.g. `/mnt/volumeI/volume/`).
+const VOLUME_CONTENT_DIR: &str = "volume";
+
+/// Scan root for a mount: `<mount>/volume/` when present; fake dev volumes fall back to the mount.
+fn volume_scan_root(mount: &Path, allow_mount_fallback: bool) -> Option<PathBuf> {
+    let content = mount.join(VOLUME_CONTENT_DIR);
+    if content.is_dir() {
+        debug::scan(format!(
+            "  content root: {} (inside {VOLUME_CONTENT_DIR}/)",
+            content.display()
+        ));
+        return Some(content);
+    }
+    if allow_mount_fallback {
+        debug::scan(format!(
+            "  no {VOLUME_CONTENT_DIR}/ at {} — scanning mount root (fake volumes)",
+            mount.display()
+        ));
+        return Some(mount.to_path_buf());
+    }
+    debug::scan(format!(
+        "  no {VOLUME_CONTENT_DIR}/ at {} — volume skipped",
+        mount.display()
+    ));
+    None
+}
 
 fn file_size(file: &FileNode) -> u64 {
     file.metadata
@@ -110,7 +137,10 @@ fn collect_video_paths(folder: &FolderNode, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn apply_probes_and_filter(folder: &mut FolderNode, probes: &HashMap<PathBuf, super::probe::VideoProbe>) {
+fn apply_probes_and_filter(
+    folder: &mut FolderNode,
+    batch: &super::probe::ProbeBatchResult,
+) {
     folder.files.retain_mut(|file| {
         if !is_video_path(&file.path) {
             debug::scan(format!(
@@ -119,15 +149,35 @@ fn apply_probes_and_filter(folder: &mut FolderNode, probes: &HashMap<PathBuf, su
             ));
             return false;
         }
-        let Some(probe) = probes.get(&file.path) else {
+
+        let Some(outcome) = batch.results.get(&file.path) else {
+            if batch.ffprobe_available {
+                debug::scan(format!(
+                    "  probe-filter: drop {} (no ffprobe result)",
+                    file.path.display()
+                ));
+                return false;
+            }
             let keep = is_valid_video(file);
             debug::scan(format!(
-                "  probe-filter: {} no ffprobe result — {}",
+                "  probe-filter: {} ffprobe unavailable — {}",
                 file.path.display(),
                 if keep { "keep" } else { "drop" }
             ));
             return keep;
         };
+
+        let probe = match outcome {
+            super::probe::VideoProbeOutcome::Failed => {
+                debug::scan(format!(
+                    "  probe-filter: drop {} (unreadable)",
+                    file.path.display()
+                ));
+                return false;
+            }
+            super::probe::VideoProbeOutcome::Ok(probe) => probe,
+        };
+
         let metadata = file.metadata.get_or_insert_with(|| FileMetadata {
             size: None,
             duration_ms: None,
@@ -151,13 +201,17 @@ fn apply_probes_and_filter(folder: &mut FolderNode, probes: &HashMap<PathBuf, su
         debug::scan(format!(
             "  probe-filter: {} duration={duration_ms:?} codec={codec:?} — {}",
             file.path.display(),
-            if keep { "keep" } else { "drop (<1s)" }
+            if keep {
+                "keep"
+            } else {
+                "drop (<1s)"
+            }
         ));
         keep
     });
 
     for subfolder in &mut folder.subfolders {
-        apply_probes_and_filter(subfolder, probes);
+        apply_probes_and_filter(subfolder, batch);
     }
 }
 
@@ -199,6 +253,10 @@ pub fn scan_tree(root: &str) -> FolderNode {
 
     for entry in WalkDir::new(root)
         .into_iter()
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            !should_ignore_entry_name(&name)
+        })
         .filter_map(|e: Result<walkdir::DirEntry, walkdir::Error>| e.ok())
     {
         let path = entry.path().to_path_buf();
@@ -322,13 +380,13 @@ pub fn probe_library(tree: &mut FolderNode) {
         paths.len()
     ));
     let started = Instant::now();
-    let probes = probe_videos_parallel(&paths);
+    let batch = probe_videos_parallel(&paths);
     debug::scan(format!(
         "probe: applying metadata to tree ({} result(s))...",
-        probes.len()
+        batch.results.len()
     ));
     let before = tree.reduced_number_of_file;
-    apply_probes_and_filter(tree, &probes);
+    apply_probes_and_filter(tree, &batch);
     debug::scan("probe: re-finalizing tree after filter");
     finalize_tree(tree);
     debug::scan(format!(
@@ -365,14 +423,21 @@ pub fn scan_volume_library(workspace: &str) -> FolderNode {
     let scan_started = Instant::now();
 
     for volume in volume_roots {
-        let volume_root = volume.path.to_str().expect("volume path must be valid UTF-8");
+        let Some(scan_root) = volume_scan_root(&volume.path, fake) else {
+            continue;
+        };
+        let scan_root_str = scan_root
+            .to_str()
+            .expect("volume scan path must be valid UTF-8");
         debug::scan(format!(
-            "scanning volume [{}] at {volume_root}...",
-            volume.name
+            "scanning volume [{}] at {}...",
+            volume.name,
+            scan_root.display()
         ));
         let started = Instant::now();
-        let mut node = scan_tree(volume_root);
+        let mut node = scan_tree(scan_root_str);
         node.name = volume.name.clone();
+        node.path = volume.path.clone();
         debug::scan(format!(
             "  volume [{}]: {} video file(s) in {:?}",
             volume.name,
