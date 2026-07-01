@@ -605,37 +605,25 @@ fn reconcile_tree(database: &Database, tree: &FolderNode) {
 fn spawn_library_build(tree_tx: mpsc::Sender<Result<FolderNode, ()>>, database: Arc<Database>) {
     thread::spawn(move || {
         let started = Instant::now();
-        debug::refresh("background library build started");
+        debug::scan("library build started");
         let build_result = catch_unwind(AssertUnwindSafe(|| {
             let mut tree = scan_volume_library(WORKSPACE);
-            debug::refresh(format!(
-                "fast scan finished in {:?}: {} volumes, {} files",
-                started.elapsed(),
-                tree.subfolders.len(),
-                tree.reduced_number_of_file
-            ));
             let _ = tree_tx.send(Ok(tree.clone()));
 
-            let probe_started = Instant::now();
             probe_library(&mut tree);
-            debug::refresh(format!(
-                "probe finished in {:?}: {} files",
-                probe_started.elapsed(),
-                tree.reduced_number_of_file
-            ));
             reconcile_tree(&database, &tree);
             tree
         }))
         .map_err(|_| ());
 
         match &build_result {
-            Ok(tree) => debug::refresh(format!(
-                "library build finished in {:?}: {} volumes, {} files",
+            Ok(tree) => debug::scan(format!(
+                "library build finished in {:?}: {} volume(s), {} file(s)",
                 started.elapsed(),
                 tree.subfolders.len(),
                 tree.reduced_number_of_file
             )),
-            Err(()) => debug::refresh(format!(
+            Err(()) => debug::scan(format!(
                 "library build panicked after {:?}",
                 started.elapsed()
             )),
@@ -680,7 +668,7 @@ fn wire_library_refresh(
     let mut timer_started = false;
 
     rescanning.store(true, Ordering::Release);
-    debug::refresh("starting initial library build");
+    debug::scan("starting initial library build");
     spawn_library_build(tree_tx.clone(), Arc::clone(&database));
 
     let timer = Rc::new(Timer::default());
@@ -707,9 +695,8 @@ fn wire_library_refresh(
                         browsing.reload_tree(tree);
                     });
                     let visible_after = state.borrow().visible_items().len();
-                    debug::refresh(format!(
-                        "tree applied: {volume_count} volumes, {file_count} files total, visible {visible_before} -> {visible_after}, stack={}",
-                        state.borrow().stack.len()
+                    debug::scan(format!(
+                        "tree applied to UI: {volume_count} volume(s), {file_count} file(s), visible {visible_before} -> {visible_after}"
                     ));
                     rescan_pending_logged = false;
                 }

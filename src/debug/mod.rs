@@ -4,6 +4,13 @@ pub fn refresh(message: impl std::fmt::Display) {
     eprintln!("[refresh] {message}");
 }
 
+/// Volume scan / ffprobe progress — plain stdout, same as Slint renderer lines.
+pub fn scan(message: impl std::fmt::Display) {
+    use std::io::Write;
+    println!("{message}");
+    let _ = std::io::stdout().flush();
+}
+
 /// SQLite reads, writes, and reconciliation.
 pub fn db(message: impl std::fmt::Display) {
     #[cfg(debug_assertions)]

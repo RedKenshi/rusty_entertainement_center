@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::thread;
+use std::time::Instant;
+
+use crate::debug;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct VideoProbe {
@@ -50,7 +53,7 @@ fn ffprobe_available() -> bool {
     })
 }
 
-fn probe_worker_count() -> usize {
+pub fn probe_worker_count() -> usize {
     std::env::var("RUSTY_PROBE_WORKERS")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -67,22 +70,48 @@ pub fn probe_videos_parallel(paths: &[PathBuf]) -> HashMap<PathBuf, VideoProbe> 
         .collect();
 
     if paths.is_empty() || !ffprobe_available() {
+        if paths.is_empty() {
+            debug::scan("probe: no video paths");
+        } else {
+            debug::scan("probe: ffprobe not available");
+        }
         return HashMap::new();
     }
 
     let workers = probe_worker_count().min(paths.len());
     let chunk_size = paths.len().div_ceil(workers);
+    debug::scan(format!(
+        "probe: dispatching {} file(s) to {workers} worker(s)",
+        paths.len()
+    ));
     let mut handles = Vec::new();
 
-    for chunk in paths.chunks(chunk_size.max(1)) {
+    for (worker_index, chunk) in paths.chunks(chunk_size.max(1)).enumerate() {
         let chunk = chunk.to_vec();
         handles.push(thread::spawn(move || {
             let mut results = HashMap::new();
             for path in chunk {
                 if !is_video_path(&path) {
+                    debug::scan(format!(
+                        "  probe skip (worker {worker_index}): {} — not video",
+                        path.display()
+                    ));
                     continue;
                 }
-                results.insert(path.clone(), probe_video(&path));
+                debug::scan(format!(
+                    "  probe start (worker {worker_index}): {}",
+                    path.display()
+                ));
+                let started = Instant::now();
+                let probe = probe_video(&path);
+                debug::scan(format!(
+                    "  probe done (worker {worker_index}): {} in {:?} duration={:?} codec={:?}",
+                    path.display(),
+                    started.elapsed(),
+                    probe.duration_ms,
+                    probe.codec
+                ));
+                results.insert(path, probe);
             }
             results
         }));
@@ -94,6 +123,7 @@ pub fn probe_videos_parallel(paths: &[PathBuf]) -> HashMap<PathBuf, VideoProbe> 
             merged.extend(partial);
         }
     }
+    debug::scan(format!("probe: merged {} result(s)", merged.len()));
     merged
 }
 
